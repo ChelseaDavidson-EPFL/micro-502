@@ -723,6 +723,7 @@ if __name__ == '__main__':
 
                         # Read the camera feed
                         camera_data = drone.read_camera()
+                        assignment.show_detection()
                         
                         # Update the sensor data in the thread
                         with sensor_lock:

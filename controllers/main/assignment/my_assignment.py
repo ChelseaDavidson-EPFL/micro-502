@@ -30,6 +30,10 @@ class Mode(Enum):
     FIRST_LAP = 2
     FAST_LAP = 3
 
+# Pink gates
+gates_r_value = 211
+gates_g_value = 144
+gates_b_value = 222
 
 class MyAssignment:
     def __init__(self, ):
@@ -37,19 +41,13 @@ class MyAssignment:
         self.mode = Mode.FIRST_LAP
         self.has_taken_off = False
         self.gate_positions = [] # Store gates as tuples of tuples representing coords of the corners ((x, y, z), ... x 4)
+        self.gate_detection_img = None
+        self.target_gate_detection_img = None
 
     def compute_command(self, sensor_data, camera_data, dt):
-
         # NOTE: Displaying the camera image with cv2.imshow() will throw an error because GUI operations should be performed in the main thread.
         # If you want to display the camera image you can call it in main.py.
 
-        lower, upper = self.rgb_to_hsv_bounds(r=211, g=144, b=222)  # using colour picker
-        points = self.locate_pink_area(camera_data, lower, upper)
-        if points is not None:
-            cv2.polylines(camera_data, [points], isClosed=True, color=(0, 255, 0), thickness=2)
-
-        cv2.imshow("Test", camera_data)
-        cv2.waitKey(0)
         # Take off command
         if sensor_data['z_global'] < 0.49 and not self.has_taken_off:
             control_command = [sensor_data['x_global'], sensor_data['y_global'], 1.0, sensor_data['yaw']]
@@ -58,23 +56,58 @@ class MyAssignment:
             self.has_taken_off = True
 
         # ---- YOUR CODE HERE ----
+        self.get_move_to_gate_command(camera_data)
+        #TODO - replace this one below with the move to gate command
         control_command = [sensor_data['x_global'], sensor_data['y_global'], 1.0, sensor_data['yaw']]
 
         return control_command # Ordered as array with: [pos_x_cmd, pos_y_cmd, pos_z_cmd, yaw_cmd] in meters and radians
-    
-    def get_move_to_gate_command(self):
-        #TODO - call locate gates, 
+
+    def get_move_to_gate_command(self, camera_data): #TODO - this will be different for later laps
+        #TODO - call locate gates, turn to left if there are none, choose rightmost if multiple, convert to world frame
+        gates = self.locate_gates(camera_data)
+        #TODO - check to see which is next and convert to world
+        if gates is None:
+            #TODO - turn to left
+            return
+        #TODO - check if more than 1 gate (4 points)
+        if len(gates) == 1:
+            target_gate = gates[0]
+        else:
+            # Multiple gates — pick rightmost by center x - TODO: maybe this should be based on world coords not camera
+            target_gate = max(gates, key=lambda g: g[:, 0].mean())
+        
+        # Store the target gate to show later 
+        self.target_gate_detection_img = camera_data.copy()
+        self.target_gate_detection_img = cv2.polylines(self.target_gate_detection_img, [target_gate], isClosed=True, color=(0, 0, 255), thickness=2)
+        # TODO - convert target_gate corners to world frame
+        return
+
+    def convert_pixel_to_world(self, pixel_coords):
+        #TODO
         return
 
     def locate_gates(self, camera_data):
-        # TODO - call get image and locate corners in image, do check to see which is next, convert to world frame
-        if (camera_data):
-            print("Got an image")
-        return 
+        # TODO - call get image and locate corners in image
+        lower, upper = self.rgb_to_hsv_bounds(r=gates_r_value, g=gates_g_value, b=gates_b_value)
+        gates = self.locate_pink_area(camera_data, lower, upper)
+
+        if gates is None:
+            return None
+
+        # Filter to only gates with exactly 4 corners
+        valid_gates = [g for g in gates if len(g) == 4]
+
+        if not valid_gates:
+            return None
+
+        for points in valid_gates:
+            self.gate_detection_img = camera_data.copy()
+            self.gate_detection_img = cv2.polylines(self.gate_detection_img, [points], isClosed=True, color=(0, 255, 0), thickness=2)
+
+        return valid_gates # list of polygons, or None
     
     def locate_pink_area(self, image, lower_pink, upper_pink, min_area=100):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
         mask = cv2.inRange(hsv, lower_pink, upper_pink)
 
         kernel = np.ones((5, 5), np.uint8)
@@ -88,14 +121,14 @@ class MyAssignment:
             print("No pink region found — check your HSV bounds")
             return None
 
-        largest = max(contours, key=cv2.contourArea)
+        # Return a polygon for each contour
+        gates = []
+        for contour in contours:
+            epsilon = 0.02 * cv2.arcLength(contour, True)
+            polygon = cv2.approxPolyDP(contour, epsilon, True)
+            gates.append(polygon.reshape(-1, 2))
 
-        # Approximate contour to a polygon
-        epsilon = 0.02 * cv2.arcLength(largest, True)
-        polygon = cv2.approxPolyDP(largest, epsilon, True)
-
-        # Reshape to a clean list of (x, y) points
-        return polygon.reshape(-1, 2)
+        return gates  # list of Nx2 arrays, one per gate
 
     def rgb_to_hsv_bounds(self, r, g, b, hue_tolerance=10, sat_min=40, val_min=80):
         """Helper to convert an RGB eyedropper reading into HSV bounds for inRange."""
@@ -112,4 +145,12 @@ _controller = MyAssignment()
 
 def get_command(sensor_data, camera_data, dt):
     return _controller.compute_command(sensor_data, camera_data, dt)
+
+def show_detection():
+    if _controller.gate_detection_img is not None:
+        cv2.imshow("All Gate Detection", _controller.gate_detection_img)
+        cv2.waitKey(1)
+    if _controller.target_gate_detection_img is not None:
+        cv2.imshow("Target Gate Detection", _controller.target_gate_detection_img)
+        cv2.waitKey(1)
 
