@@ -32,13 +32,13 @@ class Lap(Enum):
 class Mode(Enum):
     TAKE_OFF = 3
     SEARCH_GATE = 4
-    CAPTURE_SECOND_PHOTO = 5
-    FLY_THROUGH_GATE = 6
+    FLY_THROUGH_GATE = 5
 
 # Pink gates
 gates_r_value = 211
 gates_g_value = 144
 gates_b_value = 222
+GATE_HEIGHT = 0.4 # In meters 
 
 # Rotation amounts
 take_second_photo_rotation = 0.05
@@ -71,11 +71,6 @@ class MyAssignment:
         self.gate_detection_img = None
         self.target_gate_detection_img = None
         self.current_gate_number = 0 # Doing zero indexing
-        self.target_yaw = None
-        self.current_gate_first_pixels = None
-        self.current_gate_second_pixels = None
-        self.current_gate_first_sensor_data = None
-        self.current_gate_second_sensor_data = None
 
     def compute_command(self, sensor_data, camera_data, dt):
         # NOTE: Displaying the camera image with cv2.imshow() will throw an error because GUI operations should be performed in the main thread.
@@ -94,10 +89,7 @@ class MyAssignment:
                 self.mode = Mode.SEARCH_GATE
         # Search for gate command
         elif (self.mode == Mode.SEARCH_GATE):
-            control_command = self.get_search_gate_command(camera_data, sensor_data)
-        # Take 2nd photo command
-        elif (self.mode == Mode.CAPTURE_SECOND_PHOTO):
-            control_command = self.get_capture_second_photo_command(camera_data, sensor_data)      
+            control_command = self.get_search_gate_command(camera_data, sensor_data)   
         elif (self.mode == Mode.FLY_THROUGH_GATE):
             control_command = self.get_fly_through_gate_command(sensor_data)
 
@@ -141,27 +133,80 @@ class MyAssignment:
         self.target_gate_detection_img = camera_data.copy()
         self.target_gate_detection_img = cv2.polylines(self.target_gate_detection_img, [target_gate], isClosed=True, color=(0, 0, 255), thickness=2)
         
-        # Found a gate so store its pixels and try to take a 2nd photo 
-        self.current_gate_first_pixels = target_gate
-        self.current_gate_first_sensor_data = sensor_data
-        self.mode = Mode.CAPTURE_SECOND_PHOTO
-        self.target_yaw = sensor_data['yaw'] + take_second_photo_rotation
-        return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], self.target_yaw]
+        # Found a gate so determine world position
+        gate_corners = self.estimate_gate_position(target_gate, sensor_data)
+        center = gate_corners.mean(axis=0)
+        print("Gate corners are: ", gate_corners)
+        print("Gate center is: ", center)
 
-    def get_capture_second_photo_command(self, camera_data, sensor_data):
-        if abs(sensor_data['yaw'] - self.target_yaw) < eps:
-            # Capture 2nd photo of target gate:
-            self.current_gate_second_pixels = self.get_target_gate(camera_data) #TODO - need check if it's not in frame
-            if self.is_target_gate_too_close_to_left(camera_data, self.current_gate_second_pixels): # Rotate left more so it's completely in frame
-                return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], self.target_yaw]
-            self.current_gate_second_sensor_data = sensor_data
+        self.gate_positions.append(gate_corners)
 
-            # Can now find global position of current gate 
-            self.set_position_of_current_gate(self.current_gate_first_sensor_data, sensor_data)
+        self.mode = Mode.FLY_THROUGH_GATE
+        return [center[0], center[1], center[2], sensor_data['yaw']]
+
+    def estimate_gate_position(self, gate_pixels, sensor_data):
+        """
+        Estimates the global 3D position of all 4 gate corners from a single image,
+        accounting for camera pitch/roll by casting rays into the world frame.
+        Returns a list of 4 (x, y, z) numpy arrays matching the order of gate_pixels.
+        """
+        if len(gate_pixels) != 4:
+            return None
+
+        # 1. Get camera position and rotation in the world frame
+        P_cam_world = self.get_camera_position_in_world(sensor_data)
+        R_body_to_world = self.get_rotation_matrix(sensor_data['roll'], sensor_data['pitch'], sensor_data['yaw'])
+        R_cam_to_world = R_body_to_world @ R_CAM_TO_BODY
+
+        slopes = []
+        world_rays = []
+        
+        # 2. Convert each pixel corner into a 3D ray in the world frame
+        for px in gate_pixels:
+            v_cam = self.pixel_to_direction_vector(px)
+            v_world = R_cam_to_world @ v_cam
+            world_rays.append(v_world)
             
-            self.mode = Mode.FLY_THROUGH_GATE # Uses the set current gate position
-        return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], self.target_yaw]
-    
+            # Calculate the vertical slope of the ray (dz / dxy)
+            norm_xy = np.hypot(v_world[0], v_world[1])
+            if norm_xy < 1e-4:
+                return None # Prevent division by zero if looking perfectly vertical
+                
+            slope = v_world[2] / norm_xy
+            slopes.append(slope)
+
+        if len(slopes) != 4:
+            return None
+
+        # 3. Sort a COPY of the slopes descending to find top and bottom edges.
+        # (Using a copy ensures we don't lose the original corner order)
+        sorted_slopes = sorted(slopes, reverse=True)
+        m_top = (sorted_slopes[0] + sorted_slopes[1]) / 2.0
+        m_bot = (sorted_slopes[2] + sorted_slopes[3]) / 2.0
+
+        # 4. Calculate horizontal distance to the gate
+        # Using the known 0.4m height difference between top and bottom edges
+        slope_diff = m_top - m_bot
+        if slope_diff < 1e-4:
+            return None # Prevent division by zero 
+
+        D_xy = GATE_HEIGHT / slope_diff
+
+        # 5. Calculate the 3D position of EACH corner
+        corner_positions = []
+        for v_world in world_rays:
+            norm_xy = np.hypot(v_world[0], v_world[1])
+            
+            # Scale the normalized ray by the computed horizontal distance
+            corner_x = P_cam_world[0] + D_xy * (v_world[0] / norm_xy)
+            corner_y = P_cam_world[1] + D_xy * (v_world[1] / norm_xy)
+            corner_z = P_cam_world[2] + D_xy * (v_world[2] / norm_xy)
+            
+            corner_positions.append(np.array([corner_x, corner_y, corner_z]))
+
+        # Returns a list of 4 points in world coordinates
+        return np.array(corner_positions)
+
     def get_fly_through_gate_command(self, sensor_data):
         # TODO - UP TO THIS!!!!!!!!!! - Calculate center of current gate (set by self.current_gate_number) and figure out the pos + yaw of what it would be to fly through this (set target a bit forward - might be okay to go through it head on no yaw??)
         # TODO - Similar to in get_capture_second_photo_command, if all x,y,z,yaw sensor data matches the center of the current gate then restart loop (set mode to search and increment gate number)
@@ -173,8 +218,6 @@ class MyAssignment:
 
         # Compute centroid
         center = pts.mean(axis=0)
-        print("Center of gate is: ", center[0], center[1], center[2])
-        print("Current pos is: ", [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']])
         return [center[0], center[1], center[2], sensor_data['yaw']]
     
     def get_camera_position_in_world(self, sensor_data):
@@ -214,70 +257,6 @@ class MyAssignment:
         vz = F_PIXELS
 
         return np.array([vx, vy, vz], dtype=float)
-
-    def triangulate_point(self, P, r, Q, s):
-        """
-        Triangulate a 3D point from two rays in world frame.
-        P, Q: camera positions (world frame)
-        r, s: direction vectors (world frame)
-        Returns H: estimated 3D world position
-        """
-        # Solve using pseudoinverse: [r | -s] [lambda; mu] = Q - P
-        A = np.column_stack([r, -s])
-        b = Q - P
-        params, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
-        lam, mu = params
-
-        F = P + lam * r
-        G = Q + mu * s
-        H = (F + G) / 2  # midpoint = best estimate of 3D point
-        return H
-
-    def set_position_of_current_gate(self, sensor_data_first, sensor_data_second):
-        """
-        Triangulate each corner of the gate using two photos.
-        Stores result in self.gate_positions.
-        """
-        if self.current_gate_first_pixels is None or self.current_gate_second_pixels is None:
-            print("Missing gate pixel data")
-            return
-
-        # Camera positions in world frame at each capture
-        P = self.get_camera_position_in_world(sensor_data_first)
-        Q = self.get_camera_position_in_world(sensor_data_second)
-
-        # Rotation matrices: camera -> world, for each capture
-        R1_body_to_world = self.get_rotation_matrix(sensor_data_first['roll'],  sensor_data_first['pitch'],  sensor_data_first['yaw'])
-        R2_body_to_world = self.get_rotation_matrix(sensor_data_second['roll'], sensor_data_second['pitch'], sensor_data_second['yaw'])
-
-        R1_cam_to_world = R1_body_to_world @ R_CAM_TO_BODY
-        R2_cam_to_world = R2_body_to_world @ R_CAM_TO_BODY
-
-        gate_3d_corners = []
-        for px1, px2 in zip(self.current_gate_first_pixels, self.current_gate_second_pixels):
-            # Direction vectors in camera frame
-            v_cam1 = self.pixel_to_direction_vector(px1)
-            v_cam2 = self.pixel_to_direction_vector(px2)
-
-            # Rotate direction vectors to world frame
-            r = R1_cam_to_world @ v_cam1
-            s = R2_cam_to_world @ v_cam2
-
-            # Normalize
-            r = r / np.linalg.norm(r)
-            s = s / np.linalg.norm(s)
-
-            H = self.triangulate_point(P, r, Q, s)
-            gate_3d_corners.append(tuple(H))
-            print(f"  Corner world position: {H}")
-
-        self.gate_positions.append(tuple(gate_3d_corners))
-
-        # Clear stored pixel data for next gate
-        self.current_gate_first_pixels = None
-        self.current_gate_second_pixels = None
-
-        print(f"Gate triangulated: {gate_3d_corners}")
 
 
     # def get_move_to_gate_command(self, camera_data): #TODO - this will be different for later laps
