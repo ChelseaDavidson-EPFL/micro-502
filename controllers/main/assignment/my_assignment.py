@@ -56,9 +56,9 @@ F_PIXELS = CAM_WIDTH / (2 * np.tan(CAM_FOV / 2))  # focal length in pixels (~161
 
 # Rotation from camera frame to body frame (from appendix: zcam=xdrone, xcam=-ydrone, ycam=-zdrone)
 R_CAM_TO_BODY = np.array([
-    [ 0, -1,  0],
-    [ 0,  0, -1],
-    [ 1,  0,  0]
+    [ 0,  0,  1],   # xbody =  zcam
+    [-1,  0,  0],   # ybody = -xcam
+    [ 0, -1,  0]    # zbody = -ycam
 ])
 
 class MyAssignment:
@@ -198,7 +198,7 @@ class MyAssignment:
             [-sp,   cp*sr,             cp*cr            ]
         ])
 
-    def pixel_to_direction_vector(self, pixel_coords):
+    def pixel_to_direction_vector(self, pixel_coords, image_height=CAM_WIDTH):
         """
         Convert a pixel (u, v) to a direction vector in camera frame.
         Moves origin from top-left to center, then uses focal length as z.
@@ -206,7 +206,7 @@ class MyAssignment:
         """
         u, v = pixel_coords
         cx = CAM_WIDTH / 2   # principal point u0
-        cy = CAM_WIDTH / 2   # principal point v0 — adjust if image is not square
+        cy = image_height  / 2   # principal point v0
         
         vx = u - cx  # x in camera frame
         vy = v - cy  # y in camera frame
