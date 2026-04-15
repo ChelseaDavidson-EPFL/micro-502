@@ -32,7 +32,8 @@ class Lap(Enum):
 class Mode(Enum):
     TAKE_OFF = 3
     SEARCH_GATE = 4
-    FLY_THROUGH_GATE = 5
+    APPROACH_GATE = 5
+    FLY_THROUGH_GATE = 6
 
 # Pink gates
 gates_r_value = 211
@@ -46,6 +47,7 @@ search_gate_rotation = 0.15
 
 # Thresholds
 eps = 0.02 # Used to check if yaw is correct - Approx 1 degree
+pos_eps = 0.1 # Allow 10cm variation in approaching gate
 edge_threshold = 10  # Used to check if the detected gate is at the edge (pixels tolerance from edge)
 
 # Camera constants
@@ -72,6 +74,10 @@ class MyAssignment:
         self.target_gate_detection_img = None
         self.current_gate_number = 0 # Doing zero indexing
 
+        # Variables for approach gate state:
+        self.measurement_target_pos = None
+        self.measurement_target_yaw = None
+
     def compute_command(self, sensor_data, camera_data, dt):
         # NOTE: Displaying the camera image with cv2.imshow() will throw an error because GUI operations should be performed in the main thread.
         # If you want to display the camera image you can call it in main.py.
@@ -89,7 +95,9 @@ class MyAssignment:
                 self.mode = Mode.SEARCH_GATE
         # Search for gate command
         elif (self.mode == Mode.SEARCH_GATE):
-            control_command = self.get_search_gate_command(camera_data, sensor_data)   
+            control_command = self.get_search_gate_command(camera_data, sensor_data)  
+        elif (self.mode == Mode.APPROACH_GATE):
+            control_command = self.get_approach_gate_command(camera_data, sensor_data) 
         elif (self.mode == Mode.FLY_THROUGH_GATE):
             control_command = self.get_fly_through_gate_command(sensor_data)
 
@@ -133,16 +141,62 @@ class MyAssignment:
         self.target_gate_detection_img = camera_data.copy()
         self.target_gate_detection_img = cv2.polylines(self.target_gate_detection_img, [target_gate], isClosed=True, color=(0, 0, 255), thickness=2)
         
-        # Found a gate so determine world position
+        # Get initial rough estimation
         gate_corners = self.estimate_gate_position(target_gate, sensor_data)
+        if gate_corners is None:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
+            
         center = gate_corners.mean(axis=0)
-        print("Gate corners are: ", gate_corners)
-        print("Gate center is: ", center)
+        
+        # 2. Calculate the vector from the drone to the gate
+        drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
+        vec_to_gate = center - drone_pos
+        
+        # We only care about X/Y distance for the 0.8m offset
+        dist_xy = np.hypot(vec_to_gate[0], vec_to_gate[1])
+        
+        # 3. Calculate position exactly 0.8m in front of the gate
+        direction_xy = vec_to_gate[:2] / dist_xy
+        target_x = center[0] - (direction_xy[0] * 0.8)
+        target_y = center[1] - (direction_xy[1] * 0.8)
+        
+        # Aim the camera directly at the gate
+        self.measurement_target_yaw = np.arctan2(vec_to_gate[1], vec_to_gate[0])
+        
+        # Set target pos (matching the gate's Z to ensure it's vertically centered)
+        self.measurement_target_pos = np.array([target_x, target_y, center[2]])
+        
+        self.mode = Mode.APPROACH_GATE
+        return [self.measurement_target_pos[0], self.measurement_target_pos[1], self.measurement_target_pos[2], self.measurement_target_yaw]
 
-        self.gate_positions.append(gate_corners)
+    def get_approach_gate_command(self, camera_data, sensor_data):
+        drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
+        
+        # Check how far we are from our 0.8m measurement spot
+        dist_to_target = np.linalg.norm(self.measurement_target_pos - drone_pos)
+        
+        # If we are within 10cm of the measurement point, take the new photo
+        if dist_to_target < pos_eps:
+            target_gate = self.get_target_gate(camera_data)
+            
+            if target_gate is not None:
+                # Take final high-accuracy measurement
+                gate_corners = self.estimate_gate_position(target_gate, sensor_data)
+                
+                if gate_corners is not None:
+                    # Save the accurate corners and transition to fly through
+                    self.gate_positions.append(gate_corners)
+                    center = gate_corners.mean(axis=0)
+                    print(f"Final High-Accuracy Gate Center: {center}")
+                    
+                    self.mode = Mode.FLY_THROUGH_GATE
+                    return [center[0], center[1], center[2], self.measurement_target_yaw]
+            else:
+                # Fallback: if the gate was somehow lost from frame, rotate slightly to find it
+                return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
 
-        self.mode = Mode.FLY_THROUGH_GATE
-        return [center[0], center[1], center[2], sensor_data['yaw']]
+        # Not there yet, keep flying to the 0.8m mark
+        return [self.measurement_target_pos[0], self.measurement_target_pos[1], self.measurement_target_pos[2], self.measurement_target_yaw]
 
     def estimate_gate_position(self, gate_pixels, sensor_data):
         """
