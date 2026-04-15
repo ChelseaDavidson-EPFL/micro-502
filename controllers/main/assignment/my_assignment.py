@@ -41,8 +41,8 @@ gates_g_value = 144
 gates_b_value = 222
 
 # Rotation amounts
-take_second_photo_rotation = 0.15
-search_gate_rotation = 0.5
+take_second_photo_rotation = 0.05
+search_gate_rotation = 0.15
 
 # Thresholds
 eps = 0.02 # Used to check if yaw is correct - Approx 1 degree
@@ -51,6 +51,7 @@ edge_threshold = 10  # Used to check if the detected gate is at the edge (pixels
 # Camera constants
 CAM_FOV = 1.5  # radians
 CAM_WIDTH = 300  # pixels
+CAM_HEIGHT = 300
 CAM_OFFSET_BODY = np.array([0.03, 0, 0.01])  # camera offset from drone body
 F_PIXELS = CAM_WIDTH / (2 * np.tan(CAM_FOV / 2))  # focal length in pixels (~161)
 
@@ -198,7 +199,7 @@ class MyAssignment:
             [-sp,   cp*sr,             cp*cr            ]
         ])
 
-    def pixel_to_direction_vector(self, pixel_coords, image_height=CAM_WIDTH):
+    def pixel_to_direction_vector(self, pixel_coords):
         """
         Convert a pixel (u, v) to a direction vector in camera frame.
         Moves origin from top-left to center, then uses focal length as z.
@@ -206,7 +207,7 @@ class MyAssignment:
         """
         u, v = pixel_coords
         cx = CAM_WIDTH / 2   # principal point u0
-        cy = image_height  / 2   # principal point v0
+        cy = CAM_HEIGHT  / 2   # principal point v0
         
         vx = u - cx  # x in camera frame
         vy = v - cy  # y in camera frame
