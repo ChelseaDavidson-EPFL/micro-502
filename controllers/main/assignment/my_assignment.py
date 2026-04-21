@@ -44,6 +44,7 @@ GATE_HEIGHT = 0.4 # In meters
 
 # Rotation amounts
 search_gate_rotation = 0.15
+search_gate_translation = 0.1
 
 # Approach distance
 APPROACH_DIST = 0.8  # metres in front of gate to take measurement
@@ -156,25 +157,63 @@ class MyAssignment:
         else:
             # Multiple gates — pick rightmost by center x - TODO: maybe this should be based on world coords not camera
             target_gate = max(gates, key=lambda g: g[:, 0].mean())
-        
-        if self.is_target_gate_too_close_to_left(camera_data, target_gate):
-            return None # Need to turn to left to make sure full gate in view
 
         return target_gate
 
-    def is_target_gate_too_close_to_left(self, camera_data, target_gate):
+    def is_target_gate_not_in_view(self, camera_data, target_gate):
+        image_height = camera_data.shape[0]
         image_width = camera_data.shape[1]
 
         touching_left = any(x <= edge_threshold for x, y in target_gate)
         touching_right = any(x >= image_width - edge_threshold for x, y in target_gate)
+        touching_top = any(y <= edge_threshold for x, y in target_gate)
+        touching_bottom = any(y >= image_height - edge_threshold for x, y in target_gate)
 
-        return touching_left # TODO - also have check for touching right
+        return touching_left or touching_right or touching_top or touching_bottom
+    
+    def adjust_position_for_search(self, camera_data, sensor_data, target_gate):
+        image_height = camera_data.shape[0]
+        image_width = camera_data.shape[1]
+
+        touching_left = any(x <= edge_threshold for x, y in target_gate)
+        touching_right = any(x >= image_width - edge_threshold for x, y in target_gate)
+        touching_top = any(y <= edge_threshold for x, y in target_gate)
+        touching_bottom = any(y >= image_height - edge_threshold for x, y in target_gate)
+
+        if touching_left and not touching_right:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
+        elif touching_right and not touching_left:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] - search_gate_rotation]
+        elif touching_top and not touching_bottom:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'] + search_gate_translation, sensor_data['yaw']]
+        elif touching_bottom and not touching_top:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'] - search_gate_translation, sensor_data['yaw']]
+        elif touching_top and touching_bottom:
+            # Calculate the backward translation components using the current yaw
+            backward_dx = -np.cos(sensor_data['yaw']) * search_gate_translation
+            backward_dy = -np.sin(sensor_data['yaw']) * search_gate_translation
+            
+            return [
+                sensor_data['x_global'] + backward_dx, 
+                sensor_data['y_global'] + backward_dy, 
+                sensor_data['z_global'], 
+                sensor_data['yaw']
+            ]
+        else:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
+
+
 
     def get_search_gate_command(self, camera_data, sensor_data):
         target_gate = self.get_target_gate(camera_data)
         if target_gate is None:
+            # No gate in view, keep rotating to search
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
-
+        
+        if self.is_target_gate_not_in_view(camera_data, target_gate):
+            print("Search Gate: Target gate not fully in view, adjusting position")
+            return self.adjust_position_for_search(camera_data, sensor_data, target_gate)
+        
         self.target_gate_detection_img = camera_data.copy()
         self.target_gate_detection_img = cv2.polylines(self.target_gate_detection_img, [target_gate], isClosed=True, color=(0, 0, 255), thickness=2)
 
@@ -229,28 +268,33 @@ class MyAssignment:
 
         # Pause over, time to take the second photo and get a more accurate gate position
         target_gate = self.get_target_gate(camera_data)
-
-        if target_gate is not None:
-            gate_corners = self.estimate_gate_position(target_gate, sensor_data)
+        if (target_gate is None):
+            # If we lost the gate, go back to searching
+            self.mode = Mode.SEARCH_GATE
+            self.ready_to_take_second_photo = False
+            print("Mode: Search Gate (gate lost at measurement pos)")
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
+        
+        if self.is_target_gate_not_in_view(camera_data, target_gate):
+            print("Second photo: Target gate not fully in view, adjusting position")
+            return self.adjust_position_for_search(camera_data, sensor_data, target_gate)
+        
+        gate_corners = self.estimate_gate_position(target_gate, sensor_data)
+        
+        if gate_corners is not None:
+            self.gate_corners.append(gate_corners)
             
-            if gate_corners is not None:
-                self.gate_corners.append(gate_corners)
-                
-                center = gate_corners.mean(axis=0)
-                gate_yaw = self.estimate_gate_orientation(gate_corners, sensor_data)
-                self.gate_center_poses.append((center, gate_yaw))
-                print(f"Final High-Accuracy Gate Center: {center}")
-                print(f"Final High-Accuracy Gate Yaw: {np.degrees(gate_yaw):.1f}°")
+            center = gate_corners.mean(axis=0)
+            gate_yaw = self.estimate_gate_orientation(gate_corners, sensor_data)
+            self.gate_center_poses.append((center, gate_yaw))
+            print(f"Final High-Accuracy Gate Center: {center}")
+            print(f"Final High-Accuracy Gate Yaw: {np.degrees(gate_yaw):.1f}°")
 
-                self.mode = Mode.FLY_THROUGH_GATE
-                print("Mode: Fly Through Gate")
-                return [center[0], center[1], center[2], self.measurement_target_yaw]
+            self.mode = Mode.FLY_THROUGH_GATE
+            print("Mode: Fly Through Gate")
+            return [center[0], center[1], center[2], self.measurement_target_yaw]
 
-        # If we lost the gate, go back to searching
-        self.mode = Mode.SEARCH_GATE
-        self.ready_to_take_second_photo = False
-        print("Mode: Search Gate (gate lost at measurement pos)")
-        return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
+        
 
     def estimate_gate_position(self, gate_pixels, sensor_data):
         """
