@@ -70,6 +70,7 @@ class MyAssignment:
         self.mode = Mode.TAKE_OFF
         self.has_taken_off = False
         self.gate_positions = [] # Store gates as tuples of tuples representing coords of the corners ((x, y, z), ... x 4)
+        self.gate_centers = [] # Store just the centers of the gates for easy access when flying through
         self.gate_detection_img = None
         self.target_gate_detection_img = None
         self.current_gate_number = 0 # Doing zero indexing
@@ -93,6 +94,7 @@ class MyAssignment:
             if not self.has_taken_off and sensor_data['z_global'] > 0.49:
                 self.has_taken_off = True
                 self.mode = Mode.SEARCH_GATE
+                print("Mode: Search Gate")
         # Search for gate command
         elif (self.mode == Mode.SEARCH_GATE):
             control_command = self.get_search_gate_command(camera_data, sensor_data)  
@@ -167,6 +169,7 @@ class MyAssignment:
         self.measurement_target_pos = np.array([target_x, target_y, center[2]])
         
         self.mode = Mode.APPROACH_GATE
+        print("Mode: Approach Gate")
         return [self.measurement_target_pos[0], self.measurement_target_pos[1], self.measurement_target_pos[2], self.measurement_target_yaw]
 
     def get_approach_gate_command(self, camera_data, sensor_data):
@@ -187,9 +190,11 @@ class MyAssignment:
                     # Save the accurate corners and transition to fly through
                     self.gate_positions.append(gate_corners)
                     center = gate_corners.mean(axis=0)
+                    self.gate_centers.append(center)
                     print(f"Final High-Accuracy Gate Center: {center}")
                     
                     self.mode = Mode.FLY_THROUGH_GATE
+                    print("Mode: Fly Through Gate")
                     return [center[0], center[1], center[2], self.measurement_target_yaw]
             else:
                 # Fallback: if the gate was somehow lost from frame, rotate slightly to find it
@@ -264,14 +269,18 @@ class MyAssignment:
     def get_fly_through_gate_command(self, sensor_data):
         # TODO - UP TO THIS!!!!!!!!!! - Calculate center of current gate (set by self.current_gate_number) and figure out the pos + yaw of what it would be to fly through this (set target a bit forward - might be okay to go through it head on no yaw??)
         # TODO - Similar to in get_capture_second_photo_command, if all x,y,z,yaw sensor data matches the center of the current gate then restart loop (set mode to search and increment gate number)
-        
-        # Get current gate 
-        current_gate_points = self.gate_positions[self.current_gate_number]
-        # Convert to numpy array
-        pts = np.array(current_gate_points, dtype=float)
+        # Get current center
+        center = self.gate_centers[self.current_gate_number]
 
-        # Compute centroid
-        center = pts.mean(axis=0)
+        if (abs(sensor_data['x_global'] - center[0]) < pos_eps and
+            abs(sensor_data['y_global'] - center[1]) < pos_eps and
+            abs(sensor_data['z_global'] - center[2]) < pos_eps and
+            abs((sensor_data['yaw'] - self.measurement_target_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
+            # We are through the gate, move to next one
+            self.current_gate_number += 1
+            self.mode = Mode.SEARCH_GATE
+            print("Mode: Search Gate")
+        
         return [center[0], center[1], center[2], sensor_data['yaw']]
     
     def get_camera_position_in_world(self, sensor_data):
