@@ -160,7 +160,7 @@ class MyAssignment:
 
         return target_gate
 
-    def is_target_gate_not_in_view(self, camera_data, target_gate):
+    def is_target_gate_not_fully_in_FOV(self, camera_data, target_gate):
         image_height = camera_data.shape[0]
         image_width = camera_data.shape[1]
 
@@ -171,7 +171,7 @@ class MyAssignment:
 
         return touching_left or touching_right or touching_top or touching_bottom
     
-    def adjust_position_for_search(self, camera_data, sensor_data, target_gate):
+    def adjust_position_for_better_FOV(self, camera_data, sensor_data, target_gate):
         image_height = camera_data.shape[0]
         image_width = camera_data.shape[1]
 
@@ -210,9 +210,9 @@ class MyAssignment:
             # No gate in view, keep rotating to search
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
         
-        if self.is_target_gate_not_in_view(camera_data, target_gate):
+        if self.is_target_gate_not_fully_in_FOV(camera_data, target_gate):
             print("Search Gate: Target gate not fully in view, adjusting position")
-            return self.adjust_position_for_search(camera_data, sensor_data, target_gate)
+            return self.adjust_position_for_better_FOV(camera_data, sensor_data, target_gate)
         
         self.target_gate_detection_img = camera_data.copy()
         self.target_gate_detection_img = cv2.polylines(self.target_gate_detection_img, [target_gate], isClosed=True, color=(0, 0, 255), thickness=2)
@@ -275,9 +275,9 @@ class MyAssignment:
             print("Mode: Search Gate (gate lost at measurement pos)")
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
         
-        if self.is_target_gate_not_in_view(camera_data, target_gate):
+        if self.is_target_gate_not_fully_in_FOV(camera_data, target_gate):
             print("Second photo: Target gate not fully in view, adjusting position")
-            return self.adjust_position_for_search(camera_data, sensor_data, target_gate)
+            return self.adjust_position_for_better_FOV(camera_data, sensor_data, target_gate)
         
         gate_corners = self.estimate_gate_position(target_gate, sensor_data)
         
