@@ -35,6 +35,8 @@ class Mode(Enum):
     APPROACH_GATE = 5
     TAKE_SECOND_PHOTO = 6
     FLY_THROUGH_GATE = 7
+    GO_HOME = 8
+    LAND = 9
 
 # Pink gates
 gates_r_value = 211
@@ -75,13 +77,22 @@ R_CAM_TO_BODY = np.array([
     [ 0, -1,  0]    # zbody = -ycam
 ])
 
+# Arena info
+ARENA_CENTER = np.array([4.0, 4.0])
+HOME_POSITION = np.array([1.0, 4.0, 0.7])
+LAND_POSITION = np.array([1.0, 4.0, 0.1])
+
+
+
 class MyAssignment:
     def __init__(self, ):
         # ---- INITIALISE YOUR VARIABLES HERE ----
         self.mode = Mode.TAKE_OFF
         self.has_taken_off = False
-        self.gate_corners = [] # Store gates as tuples of tuples representing coords of the corners ((x, y, z), ... x 4)
-        self.gate_center_poses = [] # Store just the centers of the gates and their orientations for easy access when flying through
+        self.gate_corners_dict = {}         # key: gate_index → value: corners - for later laps use
+        self.gate_center_poses_dict = {}   # key: gate_index → value: (center, yaw) - for later laps use
+        self.gate_corners = [] # For first lap 
+        self.gate_center_poses = [] # For first lap - list of tuples (center, yaw) in order of detection
         self.gate_detection_img = None
         self.target_gate_detection_img = None
         self.current_gate_number = 0 # Doing zero indexing
@@ -123,7 +134,10 @@ class MyAssignment:
 
         # Default control command - TODO: remove this later 
         control_command = [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
-        
+
+        if (self.current_gate_number >= 5 and self.mode != Mode.LAND): # Since we're zero indexed, after flying through gate 4 we are done
+            self.mode = Mode.GO_HOME
+
         # Take off command
         if (self.mode == Mode.TAKE_OFF):
             if sensor_data['z_global'] < 0.49 and not self.has_taken_off:
@@ -142,6 +156,17 @@ class MyAssignment:
             control_command = self.get_fly_through_gate_command(sensor_data)
         elif (self.mode == Mode.TAKE_SECOND_PHOTO):
             control_command = self.get_capture_second_photo_command(camera_data, sensor_data)
+        elif (self.mode == Mode.GO_HOME):
+            control_command = self.get_go_home_command(sensor_data)
+        elif (self.mode == Mode.LAND):
+            print("Completed all gates, stored values are:")
+            for gate_idx in range(5):
+                if gate_idx in self.gate_center_poses_dict:
+                    center, yaw = self.gate_center_poses_dict[gate_idx]
+                    print(f"Gate {gate_idx}: Center = {center}, Yaw = {yaw}")
+                else:
+                    print(f"Gate {gate_idx}: NOT DETECTED")
+            control_command = [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
 
         # ---- YOUR CODE HERE ----
         # self.get_move_to_gate_command(camera_data)
@@ -204,8 +229,6 @@ class MyAssignment:
             ]
         else:
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
-
-
 
     def get_search_gate_command(self, camera_data, sensor_data):
         target_gate = self.get_target_gate(camera_data)
@@ -284,12 +307,22 @@ class MyAssignment:
         
         gate_corners = self.estimate_gate_position(target_gate, sensor_data)
         
-        if gate_corners is not None:
-            self.gate_corners.append(gate_corners)
-            
+        if gate_corners is not None:         
             center = gate_corners.mean(axis=0)
             gate_yaw = self.estimate_gate_orientation(gate_corners, sensor_data)
+
+            # Store these for use in first lap so we go around the circle
+            self.gate_corners.append(gate_corners)
             self.gate_center_poses.append((center, gate_yaw))
+
+            # Store them for later laps so we know where each gate is based on its index in the circle - accounts for any gates we may have missed on the first lap and ensures we can fly through in the correct order around the circle
+            gate_index = self.get_gate_index_from_position(center)
+            print(f"Detected gate center at {center}, gate index: {gate_index}")
+            if gate_index is not None:
+                self.gate_corners_dict[gate_index] = gate_corners
+                self.gate_center_poses_dict[gate_index] = (center, gate_yaw)
+            else:
+                print("Warning: Detected gate does not fall within any known gate index based on its position, it will not be stored for later laps")
             print(f"Final High-Accuracy Gate Center: {center}")
             print(f"Final High-Accuracy Gate Yaw: {np.degrees(gate_yaw):.1f}°")
 
@@ -381,10 +414,46 @@ class MyAssignment:
             print("Mode: Search Gate")
         
         return [target_x, target_y, target_z, gate_yaw]
+    
+    def get_go_home_command(self, sensor_data):
+        if (abs(sensor_data['x_global'] - HOME_POSITION[0]) < pos_eps and
+            abs(sensor_data['y_global'] - HOME_POSITION[1]) < pos_eps and
+            abs(sensor_data['z_global'] - HOME_POSITION[2]) < pos_eps):
+            self.mode = Mode.LAND
+            return [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
+        return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
+
 
     # ------------------------------------------------------------------
     # Geometry helpers
     # ------------------------------------------------------------------
+    
+    def get_gate_index_from_position(self, pos):
+        cx, cy = ARENA_CENTER[0], ARENA_CENTER[1]  # arena center
+
+        dx = pos[0] - cx   # x: up
+        dy = pos[1] - cy   # y: left
+
+        # 0° = downward (-x), but now CLOCKWISE positive
+        angle = np.atan2(-dy, -dx)
+
+        deg = np.degrees(angle)
+        if deg < 0:
+            deg += 360
+
+        # 12 sectors (30° each), centered
+        sector = int((deg + 15) // 30) % 12 + 1
+
+        mapping = {
+            3: 0,
+            5: 1,
+            7: 2,
+            9: 3,
+            11: 4
+        }
+
+        return mapping.get(sector, None)
+    
     def estimate_gate_orientation(self, gate_corners, sensor_data):
         """
         Estimate the gate's yaw orientation by looking at the vector between the two top corners.
@@ -458,33 +527,6 @@ class MyAssignment:
         vz = F_PIXELS
 
         return np.array([vx, vy, vz], dtype=float)
-
-
-    # def get_move_to_gate_command(self, camera_data): #TODO - this will be different for later laps
-    #     #TODO - call locate gates, turn to left if there are none, choose rightmost if multiple, convert to world frame
-    #     gates = self.locate_gates(camera_data)
-        
-    #     # Check to see which is next and convert to world
-    #     if gates is None:
-    #         #TODO - turn to left
-    #         return
-    #     #Check if more than 1 gate 
-    #     if len(gates) == 1:
-    #         target_gate = gates[0]
-    #     else:
-    #         # Multiple gates — pick rightmost by center x - TODO: maybe this should be based on world coords not camera
-    #         target_gate = max(gates, key=lambda g: g[:, 0].mean())
-        
-    #     # Store the target gate to show later 
-    #     self.target_gate_detection_img = camera_data.copy()
-    #     self.target_gate_detection_img = cv2.polylines(self.target_gate_detection_img, [target_gate], isClosed=True, color=(0, 0, 255), thickness=2)
-        
-    #     # TODO - convert target_gate corners to world frame
-    #     return
-
-    def convert_pixel_to_world(self, pixel_coords):
-        #TODO
-        return
 
     def locate_gates(self, camera_data):
         # TODO - call get image and locate corners in image
