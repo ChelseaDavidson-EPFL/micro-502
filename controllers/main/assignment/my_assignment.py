@@ -33,7 +33,8 @@ class Mode(Enum):
     TAKE_OFF = 3
     SEARCH_GATE = 4
     APPROACH_GATE = 5
-    FLY_THROUGH_GATE = 6
+    TAKE_SECOND_PHOTO = 6
+    FLY_THROUGH_GATE = 7
 
 # Pink gates
 gates_r_value = 211
@@ -42,13 +43,16 @@ gates_b_value = 222
 GATE_HEIGHT = 0.4 # In meters 
 
 # Rotation amounts
-take_second_photo_rotation = 0.05
 search_gate_rotation = 0.15
 
 # Thresholds
 eps = 0.02 # Used to check if yaw is correct - Approx 1 degree
 pos_eps = 0.1 # Allow 10cm variation in approaching gate
 edge_threshold = 10  # Used to check if the detected gate is at the edge (pixels tolerance from edge)
+
+# Pause durations
+PAUSE_AT_MEASUREMENT_POS = 1.0  # seconds — wait before taking 2nd photo
+PAUSE_AT_GATE_CENTER     = 1.0  # seconds — wait after reaching gate center
 
 # Camera constants
 CAM_FOV = 1.5  # radians
@@ -79,6 +83,33 @@ class MyAssignment:
         self.measurement_target_pos = None
         self.measurement_target_yaw = None
 
+        # Pause tracking
+        self.pause_start_time = None   # time.time() when pause began
+        self.pause_duration = None     # how long to pause in seconds
+        self.post_pause_mode = None    # mode to enter after pause
+        self.ready_to_take_second_photo = False # Track if we've paused
+
+    # Pause helpers 
+    def start_pause(self, duration, next_mode):
+        self.pause_start_time = time.time()
+        self.pause_duration = duration
+        self.post_pause_mode = next_mode
+
+    def is_pausing(self):
+        if self.pause_start_time is None:
+            return False
+        if time.time() - self.pause_start_time < self.pause_duration:
+            return True
+        # Pause over — transition
+        print("Mode: Take Second Photo - Finished pause, taking second photo now")
+        self.mode = self.post_pause_mode
+        self.ready_to_take_second_photo = True
+        self.pause_start_time = None
+        self.pause_duration = None
+        self.post_pause_mode = None
+        return False
+
+
     def compute_command(self, sensor_data, camera_data, dt):
         # NOTE: Displaying the camera image with cv2.imshow() will throw an error because GUI operations should be performed in the main thread.
         # If you want to display the camera image you can call it in main.py.
@@ -102,6 +133,8 @@ class MyAssignment:
             control_command = self.get_approach_gate_command(camera_data, sensor_data) 
         elif (self.mode == Mode.FLY_THROUGH_GATE):
             control_command = self.get_fly_through_gate_command(sensor_data)
+        elif (self.mode == Mode.TAKE_SECOND_PHOTO):
+            control_command = self.get_capture_second_photo_command(camera_data, sensor_data)
 
         # ---- YOUR CODE HERE ----
         # self.get_move_to_gate_command(camera_data)
@@ -182,27 +215,41 @@ class MyAssignment:
         
         # If we are within 10cm of the measurement point, take the new photo
         if dist_to_target < pos_eps:
-            target_gate = self.get_target_gate(camera_data)
+            self.mode = Mode.TAKE_SECOND_PHOTO
+            print("Mode: Take Second Photo - Pausing to take second photo at measurement position")
+            self.start_pause(PAUSE_AT_MEASUREMENT_POS, Mode.TAKE_SECOND_PHOTO) 
             
-            if target_gate is not None:
-                # Take final high-accuracy measurement
-                gate_corners = self.estimate_gate_position(target_gate, sensor_data)
-                
-                if gate_corners is not None:
-                    # Save the accurate corners and transition to fly through
-                    self.gate_positions.append(gate_corners)
-                    center = gate_corners.mean(axis=0)
-                    self.gate_centers.append(center)
-                    print(f"Final High-Accuracy Gate Center: {center}")
-                    
-                    self.mode = Mode.FLY_THROUGH_GATE
-                    print("Mode: Fly Through Gate")
-                    return [center[0], center[1], center[2], self.measurement_target_yaw]
-
-            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
-
-        # Not there yet, keep flying to the 0.8m mark
+        # Either way, fly to the 0.8m mark
         return [self.measurement_target_pos[0], self.measurement_target_pos[1], self.measurement_target_pos[2], self.measurement_target_yaw]
+
+    def get_capture_second_photo_command(self, camera_data, sensor_data): # Pause starts in approach gate
+        # This function is called when we are at the measurement position and want to take a second photo after pausing
+        pausing = self.is_pausing() # This will also handle the transition out of pausing when the time is up
+        if pausing and not self.ready_to_take_second_photo:
+            # Still pausing, hold position
+            return [self.measurement_target_pos[0], self.measurement_target_pos[1],
+                    self.measurement_target_pos[2], self.measurement_target_yaw]
+
+        # Pause over, time to take the second photo and get a more accurate gate position
+        target_gate = self.get_target_gate(camera_data)
+
+        if target_gate is not None:
+            gate_corners = self.estimate_gate_position(target_gate, sensor_data)
+            if gate_corners is not None:
+                self.gate_positions.append(gate_corners)
+                center = gate_corners.mean(axis=0)
+                self.gate_centers.append(center)
+                print(f"Final High-Accuracy Gate Center: {center}")
+                
+                self.mode = Mode.FLY_THROUGH_GATE
+                print("Mode: Fly Through Gate")
+                return [center[0], center[1], center[2], self.measurement_target_yaw]
+
+        # If we lost the gate, go back to searching
+        self.mode = Mode.SEARCH_GATE
+        self.ready_to_take_second_photo = False
+        print("Mode: Search Gate (gate lost at measurement pos)")
+        return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
 
     def estimate_gate_position(self, gate_pixels, sensor_data):
         """
