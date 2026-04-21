@@ -49,14 +49,17 @@ search_gate_translation = 0.1
 # Approach distance
 APPROACH_DIST = 0.8  # metres in front of gate to take measurement
 
+# Fly through distance - how far forward to go after the gate center when flying through
+FLY_THROUGH_DIST = 0.1
+
 # Thresholds
 eps = 0.02 # Used to check if yaw is correct - Approx 1 degree
 pos_eps = 0.05 # Allow 5cm variation in approaching gate
 edge_threshold = 10  # Used to check if the detected gate is at the edge (pixels tolerance from edge)
 
 # Pause durations
-PAUSE_AT_MEASUREMENT_POS = 1.0  # seconds — wait before taking 2nd photo
-PAUSE_AT_GATE_CENTER     = 1.0  # seconds — wait after reaching gate center
+PAUSE_AT_MEASUREMENT_POS = 3.0  # seconds — wait before taking 2nd photo
+PAUSE_AT_GATE_CENTER     = 1.5  # seconds — wait after reaching gate center
 
 # Camera constants
 CAM_FOV = 1.5  # radians
@@ -292,9 +295,7 @@ class MyAssignment:
 
             self.mode = Mode.FLY_THROUGH_GATE
             print("Mode: Fly Through Gate")
-            return [center[0], center[1], center[2], self.measurement_target_yaw]
-
-        
+            return [center[0], center[1], center[2], gate_yaw] # Don't set it as 0.1m beyond yet - we'll do that in the fly through state to ensure we are stable at the gate center before flying through        
 
     def estimate_gate_position(self, gate_pixels, sensor_data):
         """
@@ -361,22 +362,25 @@ class MyAssignment:
         return np.array(corner_positions)
 
     def get_fly_through_gate_command(self, sensor_data):
-        # TODO - UP TO THIS!!!!!!!!!! - Calculate center of current gate (set by self.current_gate_number) and figure out the pos + yaw of what it would be to fly through this (set target a bit forward - might be okay to go through it head on no yaw??)
-        # TODO - Similar to in get_capture_second_photo_command, if all x,y,z,yaw sensor data matches the center of the current gate then restart loop (set mode to search and increment gate number)
-        # Get current center
+        # Get current center and yaw
         center = self.gate_center_poses[self.current_gate_number][0]
         gate_yaw = self.gate_center_poses[self.current_gate_number][1]
 
-        if (abs(sensor_data['x_global'] - center[0]) < pos_eps and
-            abs(sensor_data['y_global'] - center[1]) < pos_eps and
-            abs(sensor_data['z_global'] - center[2]) < pos_eps and
+        # Calculate the point 0.1m beyond the gate center
+        target_x, target_y, target_z = self.compute_fly_through_position(center, gate_yaw)
+
+        # Check if we have reached the extended target point
+        if (abs(sensor_data['x_global'] - target_x) < pos_eps and
+            abs(sensor_data['y_global'] - target_y) < pos_eps and
+            abs(sensor_data['z_global'] - target_z) < pos_eps and
             abs((sensor_data['yaw'] - gate_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
-            # We are through the gate, move to next one
+            
+            # We are cleanly through the gate, move to next one
             self.current_gate_number += 1
             self.mode = Mode.SEARCH_GATE
             print("Mode: Search Gate")
         
-        return [center[0], center[1], center[2], gate_yaw]
+        return [target_x, target_y, target_z, gate_yaw]
 
     # ------------------------------------------------------------------
     # Geometry helpers
@@ -403,6 +407,16 @@ class MyAssignment:
         """
         offset_x = -np.cos(gate_yaw) * APPROACH_DIST
         offset_y = -np.sin(gate_yaw) * APPROACH_DIST
+        return np.array([gate_center[0] + offset_x,
+                         gate_center[1] + offset_y,
+                         gate_center[2]])
+    
+    def compute_fly_through_position(self, gate_center, gate_yaw):
+        """
+        Returns the 3-D point FLY_THROUGH_DIST metres beyond the gate center in the direction of the gate's facing.
+        """
+        offset_x = np.cos(gate_yaw) * FLY_THROUGH_DIST
+        offset_y = np.sin(gate_yaw) * FLY_THROUGH_DIST
         return np.array([gate_center[0] + offset_x,
                          gate_center[1] + offset_y,
                          gate_center[2]])
