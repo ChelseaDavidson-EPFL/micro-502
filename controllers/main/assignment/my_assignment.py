@@ -45,9 +45,12 @@ GATE_HEIGHT = 0.4 # In meters
 # Rotation amounts
 search_gate_rotation = 0.15
 
+# Approach distance
+APPROACH_DIST = 0.8  # metres in front of gate to take measurement
+
 # Thresholds
 eps = 0.02 # Used to check if yaw is correct - Approx 1 degree
-pos_eps = 0.1 # Allow 10cm variation in approaching gate
+pos_eps = 0.05 # Allow 5cm variation in approaching gate
 edge_threshold = 10  # Used to check if the detected gate is at the edge (pixels tolerance from edge)
 
 # Pause durations
@@ -73,8 +76,8 @@ class MyAssignment:
         # ---- INITIALISE YOUR VARIABLES HERE ----
         self.mode = Mode.TAKE_OFF
         self.has_taken_off = False
-        self.gate_positions = [] # Store gates as tuples of tuples representing coords of the corners ((x, y, z), ... x 4)
-        self.gate_centers = [] # Store just the centers of the gates for easy access when flying through
+        self.gate_corners = [] # Store gates as tuples of tuples representing coords of the corners ((x, y, z), ... x 4)
+        self.gate_center_poses = [] # Store just the centers of the gates and their orientations for easy access when flying through
         self.gate_detection_img = None
         self.target_gate_detection_img = None
         self.current_gate_number = 0 # Doing zero indexing
@@ -180,28 +183,16 @@ class MyAssignment:
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
 
         center = gate_corners.mean(axis=0)
+        gate_yaw = self.estimate_gate_orientation(gate_corners, sensor_data)
 
-        drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
-        vec_to_gate = center - drone_pos
+        approach_pos = self.compute_approach_position(center, gate_yaw)
 
-        # Yaw that faces the gate directly
-        self.measurement_target_yaw = np.arctan2(vec_to_gate[1], vec_to_gate[0])
-
-        # Unit vector in XY pointing FROM drone TOWARD gate
-        dist_xy = np.hypot(vec_to_gate[0], vec_to_gate[1])
-        direction_xy = vec_to_gate[:2] / dist_xy
-
-        # 0.8m in front of the gate means: gate_center MINUS 0.8m along the approach direction
-        # This places the drone on the drone's side of the gate, facing it
-        target_x = center[0] - direction_xy[0] * 0.8
-        target_y = center[1] - direction_xy[1] * 0.8
-        target_z = center[2]  # match gate height
-
-        self.measurement_target_pos = np.array([target_x, target_y, target_z])
+        self.measurement_target_pos = approach_pos
+        self.measurement_target_yaw = gate_yaw
 
         self.mode = Mode.APPROACH_GATE
-        print(f"Mode: Approach Gate — target={self.measurement_target_pos}, yaw={np.degrees(self.measurement_target_yaw):.1f}°")
-        return [target_x, target_y, target_z, self.measurement_target_yaw]
+        print(f"Mode: Approach Gate — target={approach_pos}, gate_yaw={np.degrees(gate_yaw):.1f}°")
+        return [approach_pos[0], approach_pos[1], approach_pos[2], gate_yaw]
 
     def get_approach_gate_command(self, camera_data, sensor_data):
         if self.measurement_target_pos is None or self.measurement_target_yaw is None:
@@ -212,12 +203,18 @@ class MyAssignment:
         
         # Check how far we are from our 0.8m measurement spot
         dist_to_target = np.linalg.norm(self.measurement_target_pos - drone_pos)
+
+        # Check yaw error (wrapped to [-π, π])
+        yaw_error = abs((sensor_data['yaw'] - self.measurement_target_yaw + np.pi) % (2 * np.pi) - np.pi)
+        facing_gate = yaw_error < eps
         
         # If we are within 10cm of the measurement point, take the new photo
-        if dist_to_target < pos_eps:
+        if dist_to_target < pos_eps and facing_gate:
             self.mode = Mode.TAKE_SECOND_PHOTO
             print("Mode: Take Second Photo - Pausing to take second photo at measurement position")
             self.start_pause(PAUSE_AT_MEASUREMENT_POS, Mode.TAKE_SECOND_PHOTO) 
+        elif dist_to_target < pos_eps and not facing_gate:
+            print(f"Approach: at position but yaw not settled yet (error={np.degrees(yaw_error):.1f}°), waiting")
             
         # Either way, fly to the 0.8m mark
         return [self.measurement_target_pos[0], self.measurement_target_pos[1], self.measurement_target_pos[2], self.measurement_target_yaw]
@@ -235,12 +232,16 @@ class MyAssignment:
 
         if target_gate is not None:
             gate_corners = self.estimate_gate_position(target_gate, sensor_data)
+            
             if gate_corners is not None:
-                self.gate_positions.append(gate_corners)
-                center = gate_corners.mean(axis=0)
-                self.gate_centers.append(center)
-                print(f"Final High-Accuracy Gate Center: {center}")
+                self.gate_corners.append(gate_corners)
                 
+                center = gate_corners.mean(axis=0)
+                gate_yaw = self.estimate_gate_orientation(gate_corners, sensor_data)
+                self.gate_center_poses.append((center, gate_yaw))
+                print(f"Final High-Accuracy Gate Center: {center}")
+                print(f"Final High-Accuracy Gate Yaw: {np.degrees(gate_yaw):.1f}°")
+
                 self.mode = Mode.FLY_THROUGH_GATE
                 print("Mode: Fly Through Gate")
                 return [center[0], center[1], center[2], self.measurement_target_yaw]
@@ -253,83 +254,114 @@ class MyAssignment:
 
     def estimate_gate_position(self, gate_pixels, sensor_data):
         """
-        Estimates the global 3D position of all 4 gate corners from a single image,
-        accounting for camera pitch/roll by casting rays into the world frame.
-        Returns a list of 4 (x, y, z) numpy arrays matching the order of gate_pixels.
+        Estimates the global 3D position of all 4 gate corners.
+        Calculates left and right distances independently to determine accurate yaw.
+        Returns corners in a strict order: [Top-Left, Top-Right, Bottom-Right, Bottom-Left].
         """
         if len(gate_pixels) != 4:
             return None
 
-        # 1. Get camera position and rotation in the world frame
         P_cam_world = self.get_camera_position_in_world(sensor_data)
         R_body_to_world = self.get_rotation_matrix(sensor_data['roll'], sensor_data['pitch'], sensor_data['yaw'])
         R_cam_to_world = R_body_to_world @ R_CAM_TO_BODY
 
-        slopes = []
-        world_rays = []
-        
-        # 2. Convert each pixel corner into a 3D ray in the world frame
+        # 1. Convert pixels to rays and group data
+        points_data = []
         for px in gate_pixels:
             v_cam = self.pixel_to_direction_vector(px)
             v_world = R_cam_to_world @ v_cam
-            world_rays.append(v_world)
             
-            # Calculate the vertical slope of the ray (dz / dxy)
             norm_xy = np.hypot(v_world[0], v_world[1])
             if norm_xy < 1e-4:
-                return None # Prevent division by zero if looking perfectly vertical
+                return None 
                 
             slope = v_world[2] / norm_xy
-            slopes.append(slope)
+            points_data.append({'px': px, 'v_world': v_world, 'norm_xy': norm_xy, 'slope': slope})
 
-        if len(slopes) != 4:
-            return None
+        # 2. Sort by X pixel coordinate to reliably separate Left from Right
+        points_data.sort(key=lambda p: p['px'][0])
+        left_side = points_data[:2]
+        right_side = points_data[2:]
 
-        # 3. Sort a COPY of the slopes descending to find top and bottom edges.
-        # (Using a copy ensures we don't lose the original corner order)
-        sorted_slopes = sorted(slopes, reverse=True)
-        m_top = (sorted_slopes[0] + sorted_slopes[1]) / 2.0
-        m_bot = (sorted_slopes[2] + sorted_slopes[3]) / 2.0
+        # 3. Sort each side by vertical slope descending to get Top and Bottom
+        left_side.sort(key=lambda p: p['slope'], reverse=True)
+        right_side.sort(key=lambda p: p['slope'], reverse=True)
 
-        # 4. Calculate horizontal distance to the gate
-        # Using the known 0.4m height difference between top and bottom edges
-        slope_diff = m_top - m_bot
-        if slope_diff < 1e-4:
-            return None # Prevent division by zero 
+        tl, bl = left_side[0], left_side[1]
+        tr, br = right_side[0], right_side[1]
 
-        D_xy = GATE_HEIGHT / slope_diff
+        # 4. Calculate horizontal distance for left and right edges INDEPENDENTLY
+        slope_diff_left = tl['slope'] - bl['slope']
+        slope_diff_right = tr['slope'] - br['slope']
 
-        # 5. Calculate the 3D position of EACH corner
+        if slope_diff_left < 1e-4 or slope_diff_right < 1e-4:
+            return None 
+
+        D_xy_left = GATE_HEIGHT / slope_diff_left
+        D_xy_right = GATE_HEIGHT / slope_diff_right
+
+        # 5. Project each corner into 3D using its respective side's distance
         corner_positions = []
-        for v_world in world_rays:
-            norm_xy = np.hypot(v_world[0], v_world[1])
+        
+        # We maintain a strict output order: TL, TR, BR, BL
+        for corner, D_xy in [(tl, D_xy_left), (tr, D_xy_right), (br, D_xy_right), (bl, D_xy_left)]:
+            v_world = corner['v_world']
+            norm_xy = corner['norm_xy']
             
-            # Scale the normalized ray by the computed horizontal distance
-            corner_x = P_cam_world[0] + D_xy * (v_world[0] / norm_xy)
-            corner_y = P_cam_world[1] + D_xy * (v_world[1] / norm_xy)
-            corner_z = P_cam_world[2] + D_xy * (v_world[2] / norm_xy)
+            cx = P_cam_world[0] + D_xy * (v_world[0] / norm_xy)
+            cy = P_cam_world[1] + D_xy * (v_world[1] / norm_xy)
+            cz = P_cam_world[2] + D_xy * (v_world[2] / norm_xy)
             
-            corner_positions.append(np.array([corner_x, corner_y, corner_z]))
+            corner_positions.append(np.array([cx, cy, cz]))
 
-        # Returns a list of 4 points in world coordinates
         return np.array(corner_positions)
 
     def get_fly_through_gate_command(self, sensor_data):
         # TODO - UP TO THIS!!!!!!!!!! - Calculate center of current gate (set by self.current_gate_number) and figure out the pos + yaw of what it would be to fly through this (set target a bit forward - might be okay to go through it head on no yaw??)
         # TODO - Similar to in get_capture_second_photo_command, if all x,y,z,yaw sensor data matches the center of the current gate then restart loop (set mode to search and increment gate number)
         # Get current center
-        center = self.gate_centers[self.current_gate_number]
+        center = self.gate_center_poses[self.current_gate_number][0]
+        gate_yaw = self.gate_center_poses[self.current_gate_number][1]
 
         if (abs(sensor_data['x_global'] - center[0]) < pos_eps and
             abs(sensor_data['y_global'] - center[1]) < pos_eps and
             abs(sensor_data['z_global'] - center[2]) < pos_eps and
-            abs((sensor_data['yaw'] - self.measurement_target_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
+            abs((sensor_data['yaw'] - gate_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
             # We are through the gate, move to next one
             self.current_gate_number += 1
             self.mode = Mode.SEARCH_GATE
             print("Mode: Search Gate")
         
-        return [center[0], center[1], center[2], self.measurement_target_yaw]
+        return [center[0], center[1], center[2], gate_yaw]
+
+    # ------------------------------------------------------------------
+    # Geometry helpers
+    # ------------------------------------------------------------------
+    def estimate_gate_orientation(self, gate_corners, sensor_data):
+        """
+        Estimate the gate's yaw orientation by looking at the vector between the two top corners.
+        Relies on the strict [TL, TR, BR, BL] ordering from estimate_gate_position.
+        """
+        # Because we enforced order in estimate_gate_position, we don't need unstable Z-sorting
+        tl, tr = gate_corners[0], gate_corners[1]
+        
+        vec = tr - tl  # Vector pointing left-to-right along the top edge
+        normal = np.array([-vec[1], vec[0], 0])  # Normal vector in the XY plane
+        
+        gate_yaw = np.arctan2(normal[1], normal[0]) 
+        return gate_yaw
+        
+    
+    def compute_approach_position(self, gate_center, gate_yaw):
+        """
+        Returns the 3-D point APPROACH_DIST metres behind the drone's facing
+        direction (i.e. on the near side of the gate).
+        """
+        offset_x = -np.cos(gate_yaw) * APPROACH_DIST
+        offset_y = -np.sin(gate_yaw) * APPROACH_DIST
+        return np.array([gate_center[0] + offset_x,
+                         gate_center[1] + offset_y,
+                         gate_center[2]])
     
     def get_camera_position_in_world(self, sensor_data):
         """Get the world position of the camera given drone sensor data."""
