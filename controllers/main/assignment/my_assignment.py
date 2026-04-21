@@ -135,44 +135,46 @@ class MyAssignment:
         return touching_left # TODO - also have check for touching right
 
     def get_search_gate_command(self, camera_data, sensor_data):
-        target_gate = self.get_target_gate(camera_data) # Finds rightmost gate 
-        if target_gate is None: # No gate in sight so rotate left 
-            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation] # Get it to try and go to 30 degrees
+        target_gate = self.get_target_gate(camera_data)
+        if target_gate is None:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
 
-        # Store the target gate to show later 
         self.target_gate_detection_img = camera_data.copy()
         self.target_gate_detection_img = cv2.polylines(self.target_gate_detection_img, [target_gate], isClosed=True, color=(0, 0, 255), thickness=2)
-        
-        # Get initial rough estimation
+
         gate_corners = self.estimate_gate_position(target_gate, sensor_data)
         if gate_corners is None:
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
-            
+
         center = gate_corners.mean(axis=0)
-        
-        # 2. Calculate the vector from the drone to the gate
+
         drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
         vec_to_gate = center - drone_pos
-        
-        # We only care about X/Y distance for the 0.8m offset
-        dist_xy = np.hypot(vec_to_gate[0], vec_to_gate[1])
-        
-        # 3. Calculate position exactly 0.8m in front of the gate
-        direction_xy = vec_to_gate[:2] / dist_xy
-        target_x = center[0] - (direction_xy[0] * 0.8)
-        target_y = center[1] - (direction_xy[1] * 0.8)
-        
-        # Aim the camera directly at the gate
+
+        # Yaw that faces the gate directly
         self.measurement_target_yaw = np.arctan2(vec_to_gate[1], vec_to_gate[0])
-        
-        # Set target pos (matching the gate's Z to ensure it's vertically centered)
-        self.measurement_target_pos = np.array([target_x, target_y, center[2]])
-        
+
+        # Unit vector in XY pointing FROM drone TOWARD gate
+        dist_xy = np.hypot(vec_to_gate[0], vec_to_gate[1])
+        direction_xy = vec_to_gate[:2] / dist_xy
+
+        # 0.8m in front of the gate means: gate_center MINUS 0.8m along the approach direction
+        # This places the drone on the drone's side of the gate, facing it
+        target_x = center[0] - direction_xy[0] * 0.8
+        target_y = center[1] - direction_xy[1] * 0.8
+        target_z = center[2]  # match gate height
+
+        self.measurement_target_pos = np.array([target_x, target_y, target_z])
+
         self.mode = Mode.APPROACH_GATE
-        print("Mode: Approach Gate")
-        return [self.measurement_target_pos[0], self.measurement_target_pos[1], self.measurement_target_pos[2], self.measurement_target_yaw]
+        print(f"Mode: Approach Gate — target={self.measurement_target_pos}, yaw={np.degrees(self.measurement_target_yaw):.1f}°")
+        return [target_x, target_y, target_z, self.measurement_target_yaw]
 
     def get_approach_gate_command(self, camera_data, sensor_data):
+        if self.measurement_target_pos is None or self.measurement_target_yaw is None:
+            self.mode = Mode.SEARCH_GATE
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
+
         drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
         
         # Check how far we are from our 0.8m measurement spot
@@ -196,9 +198,8 @@ class MyAssignment:
                     self.mode = Mode.FLY_THROUGH_GATE
                     print("Mode: Fly Through Gate")
                     return [center[0], center[1], center[2], self.measurement_target_yaw]
-            else:
-                # Fallback: if the gate was somehow lost from frame, rotate slightly to find it
-                return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
+
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
 
         # Not there yet, keep flying to the 0.8m mark
         return [self.measurement_target_pos[0], self.measurement_target_pos[1], self.measurement_target_pos[2], self.measurement_target_yaw]
@@ -281,7 +282,7 @@ class MyAssignment:
             self.mode = Mode.SEARCH_GATE
             print("Mode: Search Gate")
         
-        return [center[0], center[1], center[2], sensor_data['yaw']]
+        return [center[0], center[1], center[2], self.measurement_target_yaw]
     
     def get_camera_position_in_world(self, sensor_data):
         """Get the world position of the camera given drone sensor data."""
