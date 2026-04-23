@@ -93,27 +93,27 @@ GATE_SEARCH_POSITIONS = {
     0: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(30))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(30))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians(30 + 180 + 90)},   # sector 2 center = 30°
+        'yaw': np.radians((30 + 180 + 90))%360},   # sector 2 center = 30°
 
     1: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(90))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(90))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians(90 + 180 + 90)},   # sector 4 center = 90°
+        'yaw': np.radians((90 + 180 + 90))%360},   # sector 4 center = 90°
 
     2: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(150))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(150))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians(150 + 180 + 90)},  # sector 6 center = 150°
+        'yaw': np.radians((150 + 180 + 90))%360},  # sector 6 center = 150°
 
     3: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(210))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(210))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians(210 + 180 + 90)},  # sector 8 center = 210°
+        'yaw': np.radians((210 + 180 + 90))%360},  # sector 8 center = 210°
 
     4: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(270))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(270))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians(270 + 180 + 90)},  # sector 10 center = 270°
+        'yaw': np.radians((270 + 180 + 90))%360},  # sector 10 center = 270°
 }
 
 # Add inward direction vectors to GATE_SEARCH_POSITIONS:
@@ -215,13 +215,23 @@ class MyAssignment:
 
         target_gate, gate_corners = self.get_target_gate(camera_data, sensor_data)
 
-        if target_gate is None:
+        if target_gate is None or gate_corners is None:
             # Check if we've reached the arena center, if so reset to outer edge
             drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
-            dist_to_center = np.linalg.norm(drone_pos[:2] - ARENA_CENTER)
-            if dist_to_center < pos_eps:
-                print("Search: reached arena center without finding gate, resetting to outer edge")
+
+            # Check if drone has passed the center by projecting its displacement from
+            # the outer search position onto the inward direction. If this projection
+            # exceeds SEARCH_RADIUS the drone has travelled further than the full
+            # outer-to-center distance and must have passed (or crashed into) the center.
+            outer_pos = search_entry['pos'][:2]
+            displacement = drone_pos[:2] - outer_pos
+            progress = np.dot(displacement, inward_dir)  # metres travelled toward center
+
+            if progress >= SEARCH_RADIUS:
+                print("Search: passed arena center without finding gate, resetting to outer edge")
                 outer = search_entry['pos']
+                self.mode = Mode.GO_TO_SEARCH_AREA # Go back to search area state to reset position and yaw
+                print("Mode: Go to Search Area (resetting position after passing center)")
                 return [outer[0], outer[1], outer[2], search_yaw]
 
             # Step: current position + one translation increment toward arena center
@@ -240,10 +250,6 @@ class MyAssignment:
         self.target_gate_detection_img = cv2.polylines(
             self.target_gate_detection_img, [target_gate], isClosed=True, color=(0, 0, 255), thickness=2)
 
-        if gate_corners is None:
-            return [sensor_data['x_global'], sensor_data['y_global'],
-                    sensor_data['z_global'], sensor_data['yaw']]
-
         center = gate_corners.mean(axis=0)
         gate_yaw = self.estimate_gate_orientation(gate_corners, sensor_data)
         approach_pos = self.compute_approach_position(center, gate_yaw)
@@ -258,7 +264,7 @@ class MyAssignment:
     def get_approach_gate_command(self, camera_data, sensor_data):
         if self.measurement_target_pos is None or self.measurement_target_yaw is None:
             self.mode = Mode.GO_TO_SEARCH_AREA
-            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']] # TODO - or could do search area command
 
         drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
         
