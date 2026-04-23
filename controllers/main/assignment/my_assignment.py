@@ -1,6 +1,8 @@
 import numpy as np
 import time
 import cv2
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 # The available ground truth state measurements can be accessed by calling sensor_data[item]. All values of "item" are provided as defined in main.py within the function read_sensors.
 # The "item" values that you may later retrieve for the hardware project are:
@@ -37,7 +39,8 @@ class Mode(Enum):
     TAKE_SECOND_PHOTO = 7
     FLY_THROUGH_GATE = 8
     GO_HOME = 9
-    LAND = 10
+    EXECUTE_TRAJECTORY = 10
+    LAND = 11
 
 # Pink gates
 gates_r_value = 211
@@ -47,7 +50,7 @@ GATE_HEIGHT = 0.4 # In meters
 
 # Rotation amounts
 search_gate_rotation = 0.15
-search_gate_translation = 0.25
+search_gate_translation = 0.8 # TODO - change back to 0.25 for final
 
 # Approach distance
 APPROACH_DIST = 0.8  # metres in front of gate to take measurement
@@ -61,8 +64,8 @@ pos_eps = 0.05 # Allow 5cm variation in approaching gate
 edge_threshold = 10  # Used to check if the detected gate is at the edge (pixels tolerance from edge)
 
 # Pause durations
-PAUSE_AT_MEASUREMENT_POS = 3.0  # seconds — wait before taking 2nd photo
-PAUSE_AT_GATE_CENTER     = 1.5  # seconds — wait after reaching gate center
+PAUSE_AT_MEASUREMENT_POS = 1.5  # TODO - change back to 3.0 for final seconds — wait before taking 2nd photo
+PAUSE_AT_GATE_CENTER     = 1.0  # TODO - change back to 1.5 for final seconds — wait after reaching gate center
 
 # Camera constants
 CAM_FOV = 1.5  # radians
@@ -119,6 +122,10 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
     _to_center = ARENA_CENTER - _pos_xy
     _entry['inward_dir'] = _to_center / np.linalg.norm(_to_center)  # unit vector toward arena center
 
+# Trajectory constants
+WAYPOINT_SPACING = 0.1      # metres between waypoints along the path
+WAYPOINT_ADVANCE_DIST = 0.4 # metres ahead of drone the active waypoint sits
+
 class MyAssignment:
     def __init__(self, ):
         # ---- INITIALISE YOUR VARIABLES HERE ----
@@ -142,6 +149,11 @@ class MyAssignment:
         self.post_pause_mode = None    # mode to enter after pause
         self.ready_to_take_second_photo = False # Track if we've paused
 
+        # Trajecotry variables
+        self.trajectory_waypoints = []
+        self.current_waypoint_index = 0
+        self.current_waypoint = None
+
     def compute_command(self, sensor_data, camera_data, dt):
         # NOTE: Displaying the camera image with cv2.imshow() will throw an error because GUI operations should be performed in the main thread.
         # If you want to display the camera image you can call it in main.py.
@@ -149,7 +161,7 @@ class MyAssignment:
         # Default control command - TODO: remove this later 
         control_command = [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
 
-        if (self.current_gate_number >= 5 and self.mode != Mode.LAND): # Since we're zero indexed, after flying through gate 4 we are done
+        if (self.current_gate_number >= 5 and self.mode != Mode.EXECUTE_TRAJECTORY): # Since we're zero indexed, after flying through gate 4 we are done
             self.mode = Mode.GO_HOME
 
         # Take off command
@@ -174,15 +186,10 @@ class MyAssignment:
             control_command = self.get_capture_second_photo_command(camera_data, sensor_data)
         elif (self.mode == Mode.GO_HOME):
             control_command = self.get_go_home_command(sensor_data)
+        elif self.mode == Mode.EXECUTE_TRAJECTORY:
+            control_command = self.get_execute_trajectory_command(sensor_data)
         elif (self.mode == Mode.LAND):
-            print("Completed all gates, stored values are:")
-            for gate_idx in range(5):
-                if gate_idx in self.gate_center_poses_dict:
-                    center, yaw = self.gate_center_poses_dict[gate_idx]
-                    print(f"Gate {gate_idx}: Center = {center}, Yaw = {yaw}")
-                else:
-                    print(f"Gate {gate_idx}: NOT DETECTED")
-            control_command = [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
+            control_command = self.get_land_command()
 
         return control_command # Ordered as array with: [pos_x_cmd, pos_y_cmd, pos_z_cmd, yaw_cmd] in meters and radians
 
@@ -343,9 +350,72 @@ class MyAssignment:
         if (abs(sensor_data['x_global'] - HOME_POSITION[0]) < pos_eps and
             abs(sensor_data['y_global'] - HOME_POSITION[1]) < pos_eps and
             abs(sensor_data['z_global'] - HOME_POSITION[2]) < pos_eps):
-            self.mode = Mode.LAND
-            return [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
+            self.mode = Mode.EXECUTE_TRAJECTORY
+            print("Mode: Execute Trajectory (inside get_go_home_command)")
+            self.trajectory_waypoints = self.compute_trajectory() # TODO - could also change this to now return the compute trajectory command
         return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
+    
+    def get_land_command(self):
+        print("Completed all gates, stored values are:")
+        for gate_idx in range(5):
+            if gate_idx in self.gate_center_poses_dict:
+                center, yaw = self.gate_center_poses_dict[gate_idx]
+                print(f"Gate {gate_idx}: Center = {center}, Yaw = {yaw}")
+            else:
+                print(f"Gate {gate_idx}: NOT DETECTED")
+        return [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
+    
+    def get_execute_trajectory_command(self, sensor_data):
+        """
+        Moving-waypoint trajectory follower.
+        The active waypoint sits WAYPOINT_ADVANCE_DIST ahead of the drone along
+        the trajectory. Each call finds the closest waypoint to the drone, then
+        advances the target by WAYPOINT_ADVANCE_DIST worth of waypoints.
+        """
+        if not hasattr(self, 'trajectory_waypoints') or len(self.trajectory_waypoints) == 0:
+            print("No trajectory computed yet - computing it now")
+            self.trajectory_waypoints = self.compute_trajectory() 
+            return [sensor_data['x_global'], sensor_data['y_global'],
+                    sensor_data['z_global'], sensor_data['yaw']] # TODO - could also change this to now return the compute trajectory command
+
+        drone_pos = np.array([sensor_data['x_global'],
+                            sensor_data['y_global'],
+                            sensor_data['z_global']])
+
+        # Find the closest waypoint to the drone at or ahead of current index
+        # (avoids snapping backwards if drone overshoots)
+        closest_idx = self.current_waypoint_index
+        closest_dist = np.linalg.norm(self.trajectory_waypoints[closest_idx] - drone_pos)
+        for i in range(self.current_waypoint_index, min(self.current_waypoint_index + 20,
+                                                        len(self.trajectory_waypoints))):
+            d = np.linalg.norm(self.trajectory_waypoints[i] - drone_pos)
+            if d < closest_dist:
+                closest_dist = d
+                closest_idx = i
+
+        # Advance the target waypoint by WAYPOINT_ADVANCE_DIST past the closest point
+        steps_ahead = max(1, int(WAYPOINT_ADVANCE_DIST / WAYPOINT_SPACING))
+        target_idx = min(closest_idx + steps_ahead, len(self.trajectory_waypoints) - 1)
+
+        self.current_waypoint_index = closest_idx
+        self.current_waypoint = self.trajectory_waypoints[target_idx]
+
+        # Compute yaw to face the next waypoint
+        if target_idx + 1 < len(self.trajectory_waypoints):
+            next_wp = self.trajectory_waypoints[target_idx + 1]
+            delta = next_wp - self.current_waypoint
+            target_yaw = np.arctan2(delta[1], delta[0])
+        else:
+            target_yaw = sensor_data['yaw']  # hold yaw at end of trajectory
+
+        # Check if we've reached the end of the trajectory
+        dist_to_end = np.linalg.norm(self.trajectory_waypoints[-1] - drone_pos)
+        if dist_to_end < pos_eps:
+            print("Trajectory complete")
+            self.mode = Mode.LAND
+
+        return [self.current_waypoint[0], self.current_waypoint[1],
+                self.current_waypoint[2], target_yaw]
 
 
     # ------------------------------------------------------------------
@@ -627,6 +697,66 @@ class MyAssignment:
         vz = F_PIXELS
 
         return np.array([vx, vy, vz], dtype=float)
+    
+    def compute_trajectory(self):
+        """
+        Build a smooth trajectory from home through all detected gate centers in order,
+        then back home. Stores waypoints as a list of np.array([x, y, z]).
+        Plots the result.
+        """
+        # Build ordered list of key poses: home → gates in index order → home
+        key_points = [HOME_POSITION.copy()]
+        for gate_idx in sorted(self.gate_center_poses_dict.keys()):
+            center, _ = self.gate_center_poses_dict[gate_idx]
+            key_points.append(center.copy())
+        key_points.append(HOME_POSITION.copy())
+
+        # Interpolate waypoints at fixed spacing along straight segments
+        waypoints = []
+        for i in range(len(key_points) - 1):
+            start = key_points[i]
+            end   = key_points[i + 1]
+            seg   = end - start
+            dist  = np.linalg.norm(seg)
+            n_steps = max(1, int(dist / WAYPOINT_SPACING))
+            for t in np.linspace(0, 1, n_steps, endpoint=False):
+                waypoints.append(start + t * seg)
+        waypoints.append(key_points[-1])  # include final home point
+
+        self.trajectory_waypoints = [np.array(w) for w in waypoints]
+        self.current_waypoint_index = 0
+        self.current_waypoint = self.trajectory_waypoints[0].copy()
+
+        print(f"Trajectory computed: {len(self.trajectory_waypoints)} waypoints across {len(key_points)-1} segments")
+
+        # # --- Plot ---
+        # fig = plt.figure(figsize=(10, 8))
+        # ax = fig.add_subplot(111, projection='3d')
+
+        # wp = np.array(self.trajectory_waypoints)
+        # ax.plot(wp[:, 0], wp[:, 1], wp[:, 2], 'b-', linewidth=1, label='Trajectory')
+
+        # # Key points
+        # kp = np.array(key_points)
+        # ax.scatter(kp[:, 0], kp[:, 1], kp[:, 2], c='red', s=80, zorder=5, label='Key points')
+
+        # # Label gates
+        # for gate_idx in sorted(self.gate_center_poses_dict.keys()):
+        #     center, _ = self.gate_center_poses_dict[gate_idx]
+        #     ax.text(center[0], center[1], center[2] + 0.1, f'Gate {gate_idx}', fontsize=9)
+
+        # # Label home
+        # ax.text(HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2] + 0.1, 'Home', fontsize=9)
+
+        # ax.set_xlabel('X (m)')
+        # ax.set_ylabel('Y (m)')
+        # ax.set_zlabel('Z (m)')
+        # ax.set_title('Drone trajectory')
+        # ax.legend()
+        # plt.tight_layout()
+        # plt.show()
+
+        return self.trajectory_waypoints
     
     # --------------- Image processing helpers ---------------
     def locate_pink_area(self, image, lower_pink, upper_pink, min_area=100):
