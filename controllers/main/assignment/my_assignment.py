@@ -39,8 +39,9 @@ class Mode(Enum):
     TAKE_SECOND_PHOTO = 7
     FLY_THROUGH_GATE = 8
     GO_HOME = 9
-    EXECUTE_TRAJECTORY = 10
-    LAND = 11
+    READY_TO_EXECUTE_TRAJECTORY = 10
+    EXECUTE_TRAJECTORY = 11
+    LAND = 12
 
 # Pink gates
 gates_r_value = 211
@@ -126,7 +127,7 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
 WAYPOINT_SPACING = 0.1      # metres between waypoints along the path
 WAYPOINT_ADVANCE_DIST = 0.4 # metres ahead of drone the active waypoint sits
 
-WAYPOINT_REACHED_EPS = 0.2 # metres - how close we need to be to a waypoint to consider it reached
+WAYPOINT_REACHED_EPS = 0.5 # metres - how close we need to be to a waypoint to consider it reached
 FLY_THROUGH_WAYPOINT_REACHED_EPS = 0.7
 FLY_THROUGH_WAYPOINT_DIST = 0.8
 
@@ -166,8 +167,9 @@ class MyAssignment:
         # Default control command - TODO: remove this later 
         control_command = [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
 
-        if (self.current_gate_number >= 5 and self.mode != Mode.EXECUTE_TRAJECTORY): # Since we're zero indexed, after flying through gate 4 we are done
+        if (self.current_gate_number >= 5 and self.mode != Mode.READY_TO_EXECUTE_TRAJECTORY): # Since we're zero indexed, after flying through gate 4 we are done
             self.mode = Mode.GO_HOME
+            self.current_gate_number = 0 # Reset gate number for potential future laps
 
         # Take off command
         if (self.mode == Mode.TAKE_OFF):
@@ -191,6 +193,8 @@ class MyAssignment:
             control_command = self.get_capture_second_photo_command(camera_data, sensor_data)
         elif (self.mode == Mode.GO_HOME):
             control_command = self.get_go_home_command(sensor_data)
+        elif (self.mode == Mode.READY_TO_EXECUTE_TRAJECTORY):
+            return self.get_ready_to_execute_trajectory_command(sensor_data)
         elif self.mode == Mode.EXECUTE_TRAJECTORY:
             control_command = self.get_execute_trajectory_command(sensor_data)
         elif (self.mode == Mode.LAND):
@@ -361,9 +365,9 @@ class MyAssignment:
         if (abs(sensor_data['x_global'] - HOME_POSITION[0]) < pos_eps and
             abs(sensor_data['y_global'] - HOME_POSITION[1]) < pos_eps and
             abs(sensor_data['z_global'] - HOME_POSITION[2]) < pos_eps):
-            self.mode = Mode.EXECUTE_TRAJECTORY
+            self.mode = Mode.READY_TO_EXECUTE_TRAJECTORY
             self.current_traj_gate_number = 0
-            print("Mode: Execute Trajectory (inside get_go_home_command)")
+            print("Mode: Ready to Execute Trajectory (inside get_go_home_command)")
             self.trajectory_waypoints = self.compute_trajectory() # TODO - could also change this to now return the compute trajectory command
         return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
     
@@ -376,7 +380,19 @@ class MyAssignment:
             else:
                 print(f"Gate {gate_idx}: NOT DETECTED")
         return [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
-    
+
+    def get_ready_to_execute_trajectory_command(self, sensor_data):
+        # Get to the height of the first gate center before leaving the pad to save time:
+        target_z = self.gate_center_poses[0][0][2] # Get the z value of the first gate center
+        target_yaw = self.gate_center_poses[0][1] # Get the yaw of the first gate center
+        if (abs(sensor_data['x_global'] - HOME_POSITION[0]) < pos_eps and
+            abs(sensor_data['y_global'] - HOME_POSITION[1]) < pos_eps and
+            abs(sensor_data['z_global'] - target_z) < pos_eps and
+            abs((sensor_data['yaw'] - target_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
+            self.mode = Mode.EXECUTE_TRAJECTORY
+            print("Mode: Execute Trajectory")
+        return [sensor_data['x_global'], sensor_data['y_global'], target_z, target_yaw]
+
     def get_execute_trajectory_command(self, sensor_data):
         """
         Moving-waypoint trajectory follower.
@@ -385,6 +401,7 @@ class MyAssignment:
         advances the target by WAYPOINT_ADVANCE_DIST worth of waypoints.
         """
         center, yaw = self.gate_center_poses_dict[self.current_traj_gate_number]
+        approach_gate_x, approach_gate_y, approach_gate_z = self.compute_approach_position(center, sensor_data['yaw'])
         fly_through_target_x, fly_through_target_y, fly_through_target_z = self.compute_fly_through_waypoint_position(center, sensor_data['yaw']) # We want to fly straight through in the direction we are currently facing, not necessarily the gate yaw
 
         if (abs(sensor_data['x_global'] - fly_through_target_x) < FLY_THROUGH_WAYPOINT_REACHED_EPS and
@@ -403,8 +420,14 @@ class MyAssignment:
             abs(sensor_data['z_global'] - center[2]) < WAYPOINT_REACHED_EPS):
             # We are near the current waypoint, move waypoint through to improve speed, time to move to the next one
             return [fly_through_target_x, fly_through_target_y, fly_through_target_z, yaw]
-
-        return [center[0], center[1], center[2], yaw]
+        
+        if (abs(sensor_data['x_global'] - approach_gate_x) < FLY_THROUGH_WAYPOINT_REACHED_EPS and
+            abs(sensor_data['y_global'] - approach_gate_y) < FLY_THROUGH_WAYPOINT_REACHED_EPS and
+            abs(sensor_data['z_global'] - approach_gate_z) < FLY_THROUGH_WAYPOINT_REACHED_EPS):
+            # We are near the current waypoint, move waypoint through to improve speed, time to move to the next one
+            return [center[0], center[1], center[2], yaw]
+        
+        return [approach_gate_x, approach_gate_y, approach_gate_z, yaw]
 
 
     # ------------------------------------------------------------------
@@ -781,7 +804,7 @@ class MyAssignment:
 
         return gates  # list of Nx2 arrays, one per gate
 
-    def rgb_to_hsv_bounds(self, r, g, b, hue_tolerance=10, sat_min=40, val_min=80):
+    def rgb_to_hsv_bounds(self, r, g, b, hue_tolerance=15, sat_min=40, val_min=80):
         """Helper to convert an RGB eyedropper reading into HSV bounds for inRange."""
         pixel = np.uint8([[[b, g, r]]])  # OpenCV is BGR
         hsv = cv2.cvtColor(pixel, cv2.COLOR_BGR2HSV)[0][0]
