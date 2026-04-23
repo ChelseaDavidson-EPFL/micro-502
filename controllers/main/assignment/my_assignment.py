@@ -47,7 +47,7 @@ GATE_HEIGHT = 0.4 # In meters
 
 # Rotation amounts
 search_gate_rotation = 0.15
-search_gate_translation = 0.1
+search_gate_translation = 0.25
 
 # Approach distance
 APPROACH_DIST = 0.8  # metres in front of gate to take measurement
@@ -82,7 +82,7 @@ R_CAM_TO_BODY = np.array([
 ARENA_CENTER = np.array([4.0, 4.0])
 HOME_POSITION = np.array([1.0, 4.0, 0.7])
 LAND_POSITION = np.array([1.0, 4.0, 0.1])
-SEARCH_RADIUS = 2.5  # meters from center
+SEARCH_RADIUS = 4  # meters from center
 SEARCH_HEIGHT = 1.35  # meters
 
 # Find the gate search positions:
@@ -90,28 +90,34 @@ GATE_SEARCH_POSITIONS = {
     0: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(30))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(30))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians(30 + 180)},   # sector 2 center = 30°
+        'yaw': np.radians(30 + 180 + 90)},   # sector 2 center = 30°
 
     1: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(90))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(90))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians(90 + 180)},   # sector 4 center = 90°
+        'yaw': np.radians(90 + 180 + 90)},   # sector 4 center = 90°
 
     2: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(150))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(150))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians(150 + 180)},  # sector 6 center = 150°
+        'yaw': np.radians(150 + 180 + 90)},  # sector 6 center = 150°
 
     3: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(210))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(210))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians(210 + 180)},  # sector 8 center = 210°
+        'yaw': np.radians(210 + 180 + 90)},  # sector 8 center = 210°
 
     4: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(270))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(270))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians(270 + 180)},  # sector 10 center = 270°
+        'yaw': np.radians(270 + 180 + 90)},  # sector 10 center = 270°
 }
+
+# After defining GATE_SEARCH_POSITIONS, add inward direction vectors:
+for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
+    _pos_xy = _entry['pos'][:2]
+    _to_center = ARENA_CENTER - _pos_xy
+    _entry['inward_dir'] = _to_center / np.linalg.norm(_to_center)  # unit vector toward arena center
 
 class MyAssignment:
     def __init__(self, ):
@@ -135,6 +141,10 @@ class MyAssignment:
         self.pause_duration = None     # how long to pause in seconds
         self.post_pause_mode = None    # mode to enter after pause
         self.ready_to_take_second_photo = False # Track if we've paused
+
+        # Translation tracking in search
+        self.search_translation_pos = None  # current position along the search sweep line
+
 
     # Pause helpers 
     def start_pause(self, duration, next_mode):
@@ -174,6 +184,7 @@ class MyAssignment:
                 return control_command
             if not self.has_taken_off and sensor_data['z_global'] > 0.49:
                 self.has_taken_off = True
+                self.search_translation_pos = None  # reset sweep for fresh search
                 self.mode = Mode.GO_TO_SEARCH_AREA
                 print("Mode: Go to Search Area")
         # Search for gate command
@@ -213,23 +224,18 @@ class MyAssignment:
             abs(sensor_data['z_global'] - target_pos[2]) < pos_eps and
             abs((sensor_data['yaw'] - target_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
             self.mode = Mode.SEARCH_GATE
+            self.search_translation_pos = None  # reset sweep for fresh search
             print("Mode: Search Gate")
 
         return [target_pos[0], target_pos[1], target_pos[2], target_yaw]
         
 
     def get_target_gate(self, camera_data, sensor_data):
-        """
-        Returns the gate polygon that corresponds to the current gate we are
-        searching for, based on its estimated world position matching the
-        expected sector. Returns None if no matching gate is found.
-        """
+        """Returns (gate_polygon, gate_corners) or (None, None)."""
         gates = self.locate_gates(camera_data)
         if gates is None:
-            return None
+            return None, None
 
-        # Estimate world position for each valid detected gate and filter
-        # to only those whose position falls in the expected gate sector
         matching_gates = []
         for gate in gates:
             if len(gate) != 4:
@@ -241,16 +247,17 @@ class MyAssignment:
             gate_index = self.get_gate_index_from_position(center)
             if gate_index == self.current_gate_number:
                 matching_gates.append((gate, corners))
+            else:
+                print(f"Detected gate does not match current target gate index (detected index: {gate_index}, target index: {self.current_gate_number}), ignoring this detection")
 
         if not matching_gates:
-            return None  # No gate found in the expected sector — keep searching
+            return None, None
 
-        # If multiple gates match (unlikely but safe), pick closest to drone
         if len(matching_gates) > 1:
             drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
             matching_gates.sort(key=lambda g: np.linalg.norm(g[1].mean(axis=0) - drone_pos))
 
-        return matching_gates[0][0]
+        return matching_gates[0]  # (gate_polygon, gate_corners)
 
     def is_target_gate_not_fully_in_FOV(self, camera_data, target_gate):
         image_height = camera_data.shape[0]
@@ -295,29 +302,48 @@ class MyAssignment:
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
 
     def get_search_gate_command(self, camera_data, sensor_data):
-        target_gate = self.get_target_gate(camera_data, sensor_data)
+        search_entry = GATE_SEARCH_POSITIONS[self.current_gate_number]
+        search_yaw = search_entry['yaw']
+        inward_dir = search_entry['inward_dir']
+
+        target_gate, gate_corners = self.get_target_gate(camera_data, sensor_data)
+
         if target_gate is None:
-            # No gate in view, keep rotating to search
-            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
-        
+            # Check if we've reached the arena center, if so reset to outer edge
+            drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
+            dist_to_center = np.linalg.norm(drone_pos[:2] - ARENA_CENTER)
+            if dist_to_center < pos_eps:
+                print("Search: reached arena center without finding gate, resetting to outer edge")
+                outer = search_entry['pos']
+                return [outer[0], outer[1], outer[2], search_yaw]
+
+            # Step: current position + one translation increment toward arena center
+            return [
+                sensor_data['x_global'] + inward_dir[0] * search_gate_translation,
+                sensor_data['y_global'] + inward_dir[1] * search_gate_translation,
+                search_entry['pos'][2],  # maintain search height
+                search_yaw
+            ]
+
         if self.is_target_gate_not_fully_in_FOV(camera_data, target_gate):
             print("Search Gate: Target gate not fully in view, adjusting position")
             return self.adjust_position_for_better_FOV(camera_data, sensor_data, target_gate)
-        
-        self.target_gate_detection_img = camera_data.copy()
-        self.target_gate_detection_img = cv2.polylines(self.target_gate_detection_img, [target_gate], isClosed=True, color=(0, 0, 255), thickness=2)
 
-        gate_corners = self.estimate_gate_position(target_gate, sensor_data)
+        self.target_gate_detection_img = camera_data.copy()
+        self.target_gate_detection_img = cv2.polylines(
+            self.target_gate_detection_img, [target_gate], isClosed=True, color=(0, 0, 255), thickness=2)
+
         if gate_corners is None:
-            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
+            return [sensor_data['x_global'], sensor_data['y_global'],
+                    sensor_data['z_global'], sensor_data['yaw']]
 
         center = gate_corners.mean(axis=0)
         gate_yaw = self.estimate_gate_orientation(gate_corners, sensor_data)
-
         approach_pos = self.compute_approach_position(center, gate_yaw)
 
         self.measurement_target_pos = approach_pos
         self.measurement_target_yaw = gate_yaw
+        self.search_translation_pos = None
 
         self.mode = Mode.APPROACH_GATE
         print(f"Mode: Approach Gate — target={approach_pos}, gate_yaw={np.degrees(gate_yaw):.1f}°")
@@ -325,6 +351,7 @@ class MyAssignment:
 
     def get_approach_gate_command(self, camera_data, sensor_data):
         if self.measurement_target_pos is None or self.measurement_target_yaw is None:
+            self.search_translation_pos = None  # reset sweep for fresh search
             self.mode = Mode.GO_TO_SEARCH_AREA
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
 
@@ -357,9 +384,10 @@ class MyAssignment:
                     self.measurement_target_pos[2], self.measurement_target_yaw]
 
         # Pause over, time to take the second photo and get a more accurate gate position
-        target_gate = self.get_target_gate(camera_data, sensor_data)
+        target_gate, gate_corners = self.get_target_gate(camera_data, sensor_data)
         if (target_gate is None):
             # If we lost the gate, go back to searching
+            self.search_translation_pos = None  # reset sweep for fresh search
             self.mode = Mode.GO_TO_SEARCH_AREA
             self.ready_to_take_second_photo = False
             print("Mode: Go to search area (gate lost at measurement pos)")
@@ -369,7 +397,7 @@ class MyAssignment:
             print("Second photo: Target gate not fully in view, adjusting position")
             return self.adjust_position_for_better_FOV(camera_data, sensor_data, target_gate)
         
-        gate_corners = self.estimate_gate_position(target_gate, sensor_data)
+        # gate_corners = self.estimate_gate_position(target_gate, sensor_data)
         
         if gate_corners is not None:         
             center = gate_corners.mean(axis=0)
@@ -474,6 +502,7 @@ class MyAssignment:
             
             # We are cleanly through the gate, move to next one
             self.current_gate_number += 1
+            self.search_translation_pos = None  # reset sweep for fresh search
             self.mode = Mode.GO_TO_SEARCH_AREA
             print("Mode: Search Gate")
         
