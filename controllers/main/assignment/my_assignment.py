@@ -127,8 +127,8 @@ WAYPOINT_SPACING = 0.1      # metres between waypoints along the path
 WAYPOINT_ADVANCE_DIST = 0.4 # metres ahead of drone the active waypoint sits
 
 WAYPOINT_REACHED_EPS = 0.2 # metres - how close we need to be to a waypoint to consider it reached
-FLY_THROUGH_WAYPOINT_REACHED_EPS = 0.4
-FLY_THROUGH_WAYPOINT_DIST = 0.5
+FLY_THROUGH_WAYPOINT_REACHED_EPS = 0.7
+FLY_THROUGH_WAYPOINT_DIST = 0.8
 
 class MyAssignment:
     def __init__(self, ):
@@ -385,7 +385,7 @@ class MyAssignment:
         advances the target by WAYPOINT_ADVANCE_DIST worth of waypoints.
         """
         center, yaw = self.gate_center_poses_dict[self.current_traj_gate_number]
-        fly_through_target_x, fly_through_target_y, fly_through_target_z = self.compute_fly_through_waypoint_position(center, yaw)            
+        fly_through_target_x, fly_through_target_y, fly_through_target_z = self.compute_fly_through_waypoint_position(center, sensor_data['yaw']) # We want to fly straight through in the direction we are currently facing, not necessarily the gate yaw
 
         if (abs(sensor_data['x_global'] - fly_through_target_x) < FLY_THROUGH_WAYPOINT_REACHED_EPS and
             abs(sensor_data['y_global'] - fly_through_target_y) < FLY_THROUGH_WAYPOINT_REACHED_EPS and
@@ -628,12 +628,12 @@ class MyAssignment:
                          gate_center[1] + offset_y,
                          gate_center[2]])
     
-    def compute_fly_through_waypoint_position(self, gate_center, gate_yaw):
+    def compute_fly_through_waypoint_position(self, gate_center, fly_through_gate_yaw):
         """
         Returns the 3-D point FLY_THROUGH_WAYPOINT_DIST metres beyond the gate center in the direction of the gate's facing.
         """
-        offset_x = np.cos(gate_yaw) * FLY_THROUGH_WAYPOINT_DIST
-        offset_y = np.sin(gate_yaw) * FLY_THROUGH_WAYPOINT_DIST
+        offset_x = np.cos(fly_through_gate_yaw) * FLY_THROUGH_WAYPOINT_DIST
+        offset_y = np.sin(fly_through_gate_yaw) * FLY_THROUGH_WAYPOINT_DIST
         return np.array([gate_center[0] + offset_x,
                          gate_center[1] + offset_y,
                          gate_center[2]])
