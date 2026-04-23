@@ -126,6 +126,10 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
 WAYPOINT_SPACING = 0.1      # metres between waypoints along the path
 WAYPOINT_ADVANCE_DIST = 0.4 # metres ahead of drone the active waypoint sits
 
+WAYPOINT_REACHED_EPS = 0.2 # metres - how close we need to be to a waypoint to consider it reached
+FLY_THROUGH_WAYPOINT_REACHED_EPS = 0.4
+FLY_THROUGH_WAYPOINT_DIST = 0.5
+
 class MyAssignment:
     def __init__(self, ):
         # ---- INITIALISE YOUR VARIABLES HERE ----
@@ -381,9 +385,11 @@ class MyAssignment:
         advances the target by WAYPOINT_ADVANCE_DIST worth of waypoints.
         """
         center, yaw = self.gate_center_poses_dict[self.current_traj_gate_number]
-        if (abs(sensor_data['x_global'] - center[0]) < pos_eps and
-            abs(sensor_data['y_global'] - center[1]) < pos_eps and
-            abs(sensor_data['z_global'] - center[2]) < pos_eps):
+        fly_through_target_x, fly_through_target_y, fly_through_target_z = self.compute_fly_through_waypoint_position(center, yaw)            
+
+        if (abs(sensor_data['x_global'] - fly_through_target_x) < FLY_THROUGH_WAYPOINT_REACHED_EPS and
+            abs(sensor_data['y_global'] - fly_through_target_y) < FLY_THROUGH_WAYPOINT_REACHED_EPS and
+            abs(sensor_data['z_global'] - fly_through_target_z) < FLY_THROUGH_WAYPOINT_REACHED_EPS):
             # We are at the current gate center, time to move to the next one
             if (self.current_traj_gate_number >= 4): # Since we're zero indexed, after flying through gate 4 we are done
                 self.mode = Mode.GO_HOME
@@ -391,6 +397,12 @@ class MyAssignment:
                 return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
             else:
                 self.current_traj_gate_number += 1
+        
+        if (abs(sensor_data['x_global'] - center[0]) < WAYPOINT_REACHED_EPS and
+            abs(sensor_data['y_global'] - center[1]) < WAYPOINT_REACHED_EPS and
+            abs(sensor_data['z_global'] - center[2]) < WAYPOINT_REACHED_EPS):
+            # We are near the current waypoint, move waypoint through to improve speed, time to move to the next one
+            return [fly_through_target_x, fly_through_target_y, fly_through_target_z, yaw]
 
         return [center[0], center[1], center[2], yaw]
 
@@ -612,6 +624,16 @@ class MyAssignment:
         """
         offset_x = np.cos(gate_yaw) * FLY_THROUGH_DIST
         offset_y = np.sin(gate_yaw) * FLY_THROUGH_DIST
+        return np.array([gate_center[0] + offset_x,
+                         gate_center[1] + offset_y,
+                         gate_center[2]])
+    
+    def compute_fly_through_waypoint_position(self, gate_center, gate_yaw):
+        """
+        Returns the 3-D point FLY_THROUGH_WAYPOINT_DIST metres beyond the gate center in the direction of the gate's facing.
+        """
+        offset_x = np.cos(gate_yaw) * FLY_THROUGH_WAYPOINT_DIST
+        offset_y = np.sin(gate_yaw) * FLY_THROUGH_WAYPOINT_DIST
         return np.array([gate_center[0] + offset_x,
                          gate_center[1] + offset_y,
                          gate_center[2]])
