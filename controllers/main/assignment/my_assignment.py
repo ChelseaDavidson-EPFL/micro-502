@@ -31,12 +31,13 @@ class Lap(Enum):
 
 class Mode(Enum):
     TAKE_OFF = 3
-    SEARCH_GATE = 4
-    APPROACH_GATE = 5
-    TAKE_SECOND_PHOTO = 6
-    FLY_THROUGH_GATE = 7
-    GO_HOME = 8
-    LAND = 9
+    GO_TO_SEARCH_AREA = 4
+    SEARCH_GATE = 5
+    APPROACH_GATE = 6
+    TAKE_SECOND_PHOTO = 7
+    FLY_THROUGH_GATE = 8
+    GO_HOME = 9
+    LAND = 10
 
 # Pink gates
 gates_r_value = 211
@@ -81,8 +82,36 @@ R_CAM_TO_BODY = np.array([
 ARENA_CENTER = np.array([4.0, 4.0])
 HOME_POSITION = np.array([1.0, 4.0, 0.7])
 LAND_POSITION = np.array([1.0, 4.0, 0.1])
+SEARCH_RADIUS = 2.5  # meters from center
+SEARCH_HEIGHT = 1.35  # meters
 
+# Find the gate search positions:
+GATE_SEARCH_POSITIONS = {
+    0: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(30))),
+                         4.0 + SEARCH_RADIUS*(-np.sin(np.radians(30))),
+                         SEARCH_HEIGHT]),
+        'yaw': np.radians(30 + 180)},   # sector 2 center = 30°
 
+    1: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(90))),
+                         4.0 + SEARCH_RADIUS*(-np.sin(np.radians(90))),
+                         SEARCH_HEIGHT]),
+        'yaw': np.radians(90 + 180)},   # sector 4 center = 90°
+
+    2: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(150))),
+                         4.0 + SEARCH_RADIUS*(-np.sin(np.radians(150))),
+                         SEARCH_HEIGHT]),
+        'yaw': np.radians(150 + 180)},  # sector 6 center = 150°
+
+    3: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(210))),
+                         4.0 + SEARCH_RADIUS*(-np.sin(np.radians(210))),
+                         SEARCH_HEIGHT]),
+        'yaw': np.radians(210 + 180)},  # sector 8 center = 210°
+
+    4: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(270))),
+                         4.0 + SEARCH_RADIUS*(-np.sin(np.radians(270))),
+                         SEARCH_HEIGHT]),
+        'yaw': np.radians(270 + 180)},  # sector 10 center = 270°
+}
 
 class MyAssignment:
     def __init__(self, ):
@@ -145,9 +174,11 @@ class MyAssignment:
                 return control_command
             if not self.has_taken_off and sensor_data['z_global'] > 0.49:
                 self.has_taken_off = True
-                self.mode = Mode.SEARCH_GATE
-                print("Mode: Search Gate")
+                self.mode = Mode.GO_TO_SEARCH_AREA
+                print("Mode: Go to Search Area")
         # Search for gate command
+        elif (self.mode == Mode.GO_TO_SEARCH_AREA):
+            control_command = self.get_go_to_search_area_command(sensor_data)
         elif (self.mode == Mode.SEARCH_GATE):
             control_command = self.get_search_gate_command(camera_data, sensor_data)  
         elif (self.mode == Mode.APPROACH_GATE):
@@ -172,21 +203,54 @@ class MyAssignment:
         # self.get_move_to_gate_command(camera_data)
         return control_command # Ordered as array with: [pos_x_cmd, pos_y_cmd, pos_z_cmd, yaw_cmd] in meters and radians
 
+    def get_go_to_search_area_command(self, sensor_data):
+        # This function is not currently used since we go straight to searching, but it could be used if we wanted a separate state for flying to the search area before starting to search
+        target_pos = GATE_SEARCH_POSITIONS[self.current_gate_number]['pos']
+        target_yaw = GATE_SEARCH_POSITIONS[self.current_gate_number]['yaw']
 
-    def get_target_gate(self, camera_data):
-        gates = self.locate_gates(camera_data)
+        if (abs(sensor_data['x_global'] - target_pos[0]) < pos_eps and
+            abs(sensor_data['y_global'] - target_pos[1]) < pos_eps and
+            abs(sensor_data['z_global'] - target_pos[2]) < pos_eps and
+            abs((sensor_data['yaw'] - target_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
+            self.mode = Mode.SEARCH_GATE
+            print("Mode: Search Gate")
+
+        return [target_pos[0], target_pos[1], target_pos[2], target_yaw]
         
-        if gates is None:
-            #Turn to left
-            return None
-        # Check if more than 1 gate 
-        if len(gates) == 1: # Found a gate so now try and take a 2nd photo 
-            target_gate = gates[0] 
-        else:
-            # Multiple gates — pick rightmost by center x - TODO: maybe this should be based on world coords not camera
-            target_gate = max(gates, key=lambda g: g[:, 0].mean())
 
-        return target_gate
+    def get_target_gate(self, camera_data, sensor_data):
+        """
+        Returns the gate polygon that corresponds to the current gate we are
+        searching for, based on its estimated world position matching the
+        expected sector. Returns None if no matching gate is found.
+        """
+        gates = self.locate_gates(camera_data)
+        if gates is None:
+            return None
+
+        # Estimate world position for each valid detected gate and filter
+        # to only those whose position falls in the expected gate sector
+        matching_gates = []
+        for gate in gates:
+            if len(gate) != 4:
+                continue
+            corners = self.estimate_gate_position(gate, sensor_data)
+            if corners is None:
+                continue
+            center = corners.mean(axis=0)
+            gate_index = self.get_gate_index_from_position(center)
+            if gate_index == self.current_gate_number:
+                matching_gates.append((gate, corners))
+
+        if not matching_gates:
+            return None  # No gate found in the expected sector — keep searching
+
+        # If multiple gates match (unlikely but safe), pick closest to drone
+        if len(matching_gates) > 1:
+            drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
+            matching_gates.sort(key=lambda g: np.linalg.norm(g[1].mean(axis=0) - drone_pos))
+
+        return matching_gates[0][0]
 
     def is_target_gate_not_fully_in_FOV(self, camera_data, target_gate):
         image_height = camera_data.shape[0]
@@ -231,7 +295,7 @@ class MyAssignment:
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
 
     def get_search_gate_command(self, camera_data, sensor_data):
-        target_gate = self.get_target_gate(camera_data)
+        target_gate = self.get_target_gate(camera_data, sensor_data)
         if target_gate is None:
             # No gate in view, keep rotating to search
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
@@ -261,7 +325,7 @@ class MyAssignment:
 
     def get_approach_gate_command(self, camera_data, sensor_data):
         if self.measurement_target_pos is None or self.measurement_target_yaw is None:
-            self.mode = Mode.SEARCH_GATE
+            self.mode = Mode.GO_TO_SEARCH_AREA
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
 
         drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
@@ -293,12 +357,12 @@ class MyAssignment:
                     self.measurement_target_pos[2], self.measurement_target_yaw]
 
         # Pause over, time to take the second photo and get a more accurate gate position
-        target_gate = self.get_target_gate(camera_data)
+        target_gate = self.get_target_gate(camera_data, sensor_data)
         if (target_gate is None):
             # If we lost the gate, go back to searching
-            self.mode = Mode.SEARCH_GATE
+            self.mode = Mode.GO_TO_SEARCH_AREA
             self.ready_to_take_second_photo = False
-            print("Mode: Search Gate (gate lost at measurement pos)")
+            print("Mode: Go to search area (gate lost at measurement pos)")
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
         
         if self.is_target_gate_not_fully_in_FOV(camera_data, target_gate):
@@ -410,7 +474,7 @@ class MyAssignment:
             
             # We are cleanly through the gate, move to next one
             self.current_gate_number += 1
-            self.mode = Mode.SEARCH_GATE
+            self.mode = Mode.GO_TO_SEARCH_AREA
             print("Mode: Search Gate")
         
         return [target_x, target_y, target_z, gate_yaw]
