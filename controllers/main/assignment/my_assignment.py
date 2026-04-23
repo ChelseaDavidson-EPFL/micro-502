@@ -113,7 +113,7 @@ GATE_SEARCH_POSITIONS = {
         'yaw': np.radians(270 + 180 + 90)},  # sector 10 center = 270°
 }
 
-# After defining GATE_SEARCH_POSITIONS, add inward direction vectors:
+# Add inward direction vectors to GATE_SEARCH_POSITIONS:
 for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
     _pos_xy = _entry['pos'][:2]
     _to_center = ARENA_CENTER - _pos_xy
@@ -142,31 +142,6 @@ class MyAssignment:
         self.post_pause_mode = None    # mode to enter after pause
         self.ready_to_take_second_photo = False # Track if we've paused
 
-        # Translation tracking in search
-        self.search_translation_pos = None  # current position along the search sweep line
-
-
-    # Pause helpers 
-    def start_pause(self, duration, next_mode):
-        self.pause_start_time = time.time()
-        self.pause_duration = duration
-        self.post_pause_mode = next_mode
-
-    def is_pausing(self):
-        if self.pause_start_time is None:
-            return False
-        if time.time() - self.pause_start_time < self.pause_duration:
-            return True
-        # Pause over — transition
-        print("Mode: Take Second Photo - Finished pause, taking second photo now")
-        self.mode = self.post_pause_mode
-        self.ready_to_take_second_photo = True
-        self.pause_start_time = None
-        self.pause_duration = None
-        self.post_pause_mode = None
-        return False
-
-
     def compute_command(self, sensor_data, camera_data, dt):
         # NOTE: Displaying the camera image with cv2.imshow() will throw an error because GUI operations should be performed in the main thread.
         # If you want to display the camera image you can call it in main.py.
@@ -184,7 +159,6 @@ class MyAssignment:
                 return control_command
             if not self.has_taken_off and sensor_data['z_global'] > 0.49:
                 self.has_taken_off = True
-                self.search_translation_pos = None  # reset sweep for fresh search
                 self.mode = Mode.GO_TO_SEARCH_AREA
                 print("Mode: Go to Search Area")
         # Search for gate command
@@ -210,8 +184,6 @@ class MyAssignment:
                     print(f"Gate {gate_idx}: NOT DETECTED")
             control_command = [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
 
-        # ---- YOUR CODE HERE ----
-        # self.get_move_to_gate_command(camera_data)
         return control_command # Ordered as array with: [pos_x_cmd, pos_y_cmd, pos_z_cmd, yaw_cmd] in meters and radians
 
     def get_go_to_search_area_command(self, sensor_data):
@@ -224,82 +196,9 @@ class MyAssignment:
             abs(sensor_data['z_global'] - target_pos[2]) < pos_eps and
             abs((sensor_data['yaw'] - target_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
             self.mode = Mode.SEARCH_GATE
-            self.search_translation_pos = None  # reset sweep for fresh search
             print("Mode: Search Gate")
 
         return [target_pos[0], target_pos[1], target_pos[2], target_yaw]
-        
-
-    def get_target_gate(self, camera_data, sensor_data):
-        """Returns (gate_polygon, gate_corners) or (None, None)."""
-        gates = self.locate_gates(camera_data)
-        if gates is None:
-            return None, None
-
-        matching_gates = []
-        for gate in gates:
-            if len(gate) != 4:
-                continue
-            corners = self.estimate_gate_position(gate, sensor_data)
-            if corners is None:
-                continue
-            center = corners.mean(axis=0)
-            gate_index = self.get_gate_index_from_position(center)
-            if gate_index == self.current_gate_number:
-                matching_gates.append((gate, corners))
-            else:
-                print(f"Detected gate does not match current target gate index (detected index: {gate_index}, target index: {self.current_gate_number}), ignoring this detection")
-
-        if not matching_gates:
-            return None, None
-
-        if len(matching_gates) > 1:
-            drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
-            matching_gates.sort(key=lambda g: np.linalg.norm(g[1].mean(axis=0) - drone_pos))
-
-        return matching_gates[0]  # (gate_polygon, gate_corners)
-
-    def is_target_gate_not_fully_in_FOV(self, camera_data, target_gate):
-        image_height = camera_data.shape[0]
-        image_width = camera_data.shape[1]
-
-        touching_left = any(x <= edge_threshold for x, y in target_gate)
-        touching_right = any(x >= image_width - edge_threshold for x, y in target_gate)
-        touching_top = any(y <= edge_threshold for x, y in target_gate)
-        touching_bottom = any(y >= image_height - edge_threshold for x, y in target_gate)
-
-        return touching_left or touching_right or touching_top or touching_bottom
-    
-    def adjust_position_for_better_FOV(self, camera_data, sensor_data, target_gate):
-        image_height = camera_data.shape[0]
-        image_width = camera_data.shape[1]
-
-        touching_left = any(x <= edge_threshold for x, y in target_gate)
-        touching_right = any(x >= image_width - edge_threshold for x, y in target_gate)
-        touching_top = any(y <= edge_threshold for x, y in target_gate)
-        touching_bottom = any(y >= image_height - edge_threshold for x, y in target_gate)
-
-        if touching_left and not touching_right:
-            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
-        elif touching_right and not touching_left:
-            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] - search_gate_rotation]
-        elif touching_top and not touching_bottom:
-            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'] + search_gate_translation, sensor_data['yaw']]
-        elif touching_bottom and not touching_top:
-            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'] - search_gate_translation, sensor_data['yaw']]
-        elif touching_top and touching_bottom:
-            # Calculate the backward translation components using the current yaw
-            backward_dx = -np.cos(sensor_data['yaw']) * search_gate_translation
-            backward_dy = -np.sin(sensor_data['yaw']) * search_gate_translation
-            
-            return [
-                sensor_data['x_global'] + backward_dx, 
-                sensor_data['y_global'] + backward_dy, 
-                sensor_data['z_global'], 
-                sensor_data['yaw']
-            ]
-        else:
-            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
 
     def get_search_gate_command(self, camera_data, sensor_data):
         search_entry = GATE_SEARCH_POSITIONS[self.current_gate_number]
@@ -343,7 +242,6 @@ class MyAssignment:
 
         self.measurement_target_pos = approach_pos
         self.measurement_target_yaw = gate_yaw
-        self.search_translation_pos = None
 
         self.mode = Mode.APPROACH_GATE
         print(f"Mode: Approach Gate — target={approach_pos}, gate_yaw={np.degrees(gate_yaw):.1f}°")
@@ -351,7 +249,6 @@ class MyAssignment:
 
     def get_approach_gate_command(self, camera_data, sensor_data):
         if self.measurement_target_pos is None or self.measurement_target_yaw is None:
-            self.search_translation_pos = None  # reset sweep for fresh search
             self.mode = Mode.GO_TO_SEARCH_AREA
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
 
@@ -387,7 +284,6 @@ class MyAssignment:
         target_gate, gate_corners = self.get_target_gate(camera_data, sensor_data)
         if (target_gate is None):
             # If we lost the gate, go back to searching
-            self.search_translation_pos = None  # reset sweep for fresh search
             self.mode = Mode.GO_TO_SEARCH_AREA
             self.ready_to_take_second_photo = False
             print("Mode: Go to search area (gate lost at measurement pos)")
@@ -422,6 +318,132 @@ class MyAssignment:
             print("Mode: Fly Through Gate")
             return [center[0], center[1], center[2], gate_yaw] # Don't set it as 0.1m beyond yet - we'll do that in the fly through state to ensure we are stable at the gate center before flying through        
 
+    def get_fly_through_gate_command(self, sensor_data):
+        # Get current center and yaw
+        center = self.gate_center_poses[self.current_gate_number][0]
+        gate_yaw = self.gate_center_poses[self.current_gate_number][1]
+
+        # Calculate the point 0.1m beyond the gate center
+        target_x, target_y, target_z = self.compute_fly_through_position(center, gate_yaw)
+
+        # Check if we have reached the extended target point
+        if (abs(sensor_data['x_global'] - target_x) < pos_eps and
+            abs(sensor_data['y_global'] - target_y) < pos_eps and
+            abs(sensor_data['z_global'] - target_z) < pos_eps and
+            abs((sensor_data['yaw'] - gate_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
+            
+            # We are cleanly through the gate, move to next one
+            self.current_gate_number += 1
+            self.mode = Mode.GO_TO_SEARCH_AREA
+            print("Mode: Search Gate")
+        
+        return [target_x, target_y, target_z, gate_yaw]
+    
+    def get_go_home_command(self, sensor_data):
+        if (abs(sensor_data['x_global'] - HOME_POSITION[0]) < pos_eps and
+            abs(sensor_data['y_global'] - HOME_POSITION[1]) < pos_eps and
+            abs(sensor_data['z_global'] - HOME_POSITION[2]) < pos_eps):
+            self.mode = Mode.LAND
+            return [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
+        return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
+
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    # --------------- FOV adjustment helpers ---------------
+    def is_target_gate_not_fully_in_FOV(self, camera_data, target_gate):
+        image_height = camera_data.shape[0]
+        image_width = camera_data.shape[1]
+
+        touching_left = any(x <= edge_threshold for x, y in target_gate)
+        touching_right = any(x >= image_width - edge_threshold for x, y in target_gate)
+        touching_top = any(y <= edge_threshold for x, y in target_gate)
+        touching_bottom = any(y >= image_height - edge_threshold for x, y in target_gate)
+
+        return touching_left or touching_right or touching_top or touching_bottom
+    
+    def adjust_position_for_better_FOV(self, camera_data, sensor_data, target_gate):
+        image_height = camera_data.shape[0]
+        image_width = camera_data.shape[1]
+
+        touching_left = any(x <= edge_threshold for x, y in target_gate)
+        touching_right = any(x >= image_width - edge_threshold for x, y in target_gate)
+        touching_top = any(y <= edge_threshold for x, y in target_gate)
+        touching_bottom = any(y >= image_height - edge_threshold for x, y in target_gate)
+
+        if touching_left and not touching_right:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
+        elif touching_right and not touching_left:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] - search_gate_rotation]
+        elif touching_top and not touching_bottom:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'] + search_gate_translation, sensor_data['yaw']]
+        elif touching_bottom and not touching_top:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'] - search_gate_translation, sensor_data['yaw']]
+        elif touching_top and touching_bottom:
+            # Calculate the backward translation components using the current yaw
+            backward_dx = -np.cos(sensor_data['yaw']) * search_gate_translation
+            backward_dy = -np.sin(sensor_data['yaw']) * search_gate_translation
+            
+            return [
+                sensor_data['x_global'] + backward_dx, 
+                sensor_data['y_global'] + backward_dy, 
+                sensor_data['z_global'], 
+                sensor_data['yaw']
+            ]
+        else:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
+
+    # --------------- Gate detection and estimation helpers ---------------
+    def locate_gates(self, camera_data):
+        lower, upper = self.rgb_to_hsv_bounds(r=gates_r_value, g=gates_g_value, b=gates_b_value)
+        gates = self.locate_pink_area(camera_data, lower, upper)
+
+        if gates is None:
+            return None
+
+        # Filter to only gates with exactly 4 corners
+        valid_gates = [g for g in gates if len(g) == 4]
+
+        if not valid_gates:
+            return None
+
+        for points in valid_gates:
+            self.gate_detection_img = camera_data.copy()
+            self.gate_detection_img = cv2.polylines(self.gate_detection_img, [points], isClosed=True, color=(0, 255, 0), thickness=2)
+
+        return valid_gates # list of polygons, or None
+    
+    def get_target_gate(self, camera_data, sensor_data):
+        """Returns (gate_polygon, gate_corners) or (None, None)."""
+        gates = self.locate_gates(camera_data)
+        if gates is None:
+            return None, None
+
+        matching_gates = []
+        for gate in gates:
+            if len(gate) != 4:
+                continue
+            corners = self.estimate_gate_position(gate, sensor_data)
+            if corners is None:
+                continue
+            center = corners.mean(axis=0)
+            gate_index = self.get_gate_index_from_position(center)
+            if gate_index == self.current_gate_number:
+                matching_gates.append((gate, corners))
+            else:
+                print(f"Detected gate does not match current target gate index (detected index: {gate_index}, target index: {self.current_gate_number}), ignoring this detection")
+
+        if not matching_gates:
+            return None, None
+
+        if len(matching_gates) > 1:
+            drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
+            matching_gates.sort(key=lambda g: np.linalg.norm(g[1].mean(axis=0) - drone_pos))
+
+        return matching_gates[0]  # (gate_polygon, gate_corners)
+    
     def estimate_gate_position(self, gate_pixels, sensor_data):
         """
         Estimates the global 3D position of all 4 gate corners.
@@ -485,41 +507,20 @@ class MyAssignment:
             corner_positions.append(np.array([cx, cy, cz]))
 
         return np.array(corner_positions)
-
-    def get_fly_through_gate_command(self, sensor_data):
-        # Get current center and yaw
-        center = self.gate_center_poses[self.current_gate_number][0]
-        gate_yaw = self.gate_center_poses[self.current_gate_number][1]
-
-        # Calculate the point 0.1m beyond the gate center
-        target_x, target_y, target_z = self.compute_fly_through_position(center, gate_yaw)
-
-        # Check if we have reached the extended target point
-        if (abs(sensor_data['x_global'] - target_x) < pos_eps and
-            abs(sensor_data['y_global'] - target_y) < pos_eps and
-            abs(sensor_data['z_global'] - target_z) < pos_eps and
-            abs((sensor_data['yaw'] - gate_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
-            
-            # We are cleanly through the gate, move to next one
-            self.current_gate_number += 1
-            self.search_translation_pos = None  # reset sweep for fresh search
-            self.mode = Mode.GO_TO_SEARCH_AREA
-            print("Mode: Search Gate")
-        
-        return [target_x, target_y, target_z, gate_yaw]
     
-    def get_go_home_command(self, sensor_data):
-        if (abs(sensor_data['x_global'] - HOME_POSITION[0]) < pos_eps and
-            abs(sensor_data['y_global'] - HOME_POSITION[1]) < pos_eps and
-            abs(sensor_data['z_global'] - HOME_POSITION[2]) < pos_eps):
-            self.mode = Mode.LAND
-            return [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
-        return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
-
-
-    # ------------------------------------------------------------------
-    # Geometry helpers
-    # ------------------------------------------------------------------
+    def estimate_gate_orientation(self, gate_corners, sensor_data):
+        """
+        Estimate the gate's yaw orientation by looking at the vector between the two top corners.
+        Relies on the strict [TL, TR, BR, BL] ordering from estimate_gate_position.
+        """
+        # Because we enforced order in estimate_gate_position, we don't need unstable Z-sorting
+        tl, tr = gate_corners[0], gate_corners[1]
+        
+        vec = tr - tl  # Vector pointing left-to-right along the top edge
+        normal = np.array([-vec[1], vec[0], 0])  # Normal vector in the XY plane
+        
+        gate_yaw = np.arctan2(normal[1], normal[0]) 
+        return gate_yaw
     
     def get_gate_index_from_position(self, pos):
         cx, cy = ARENA_CENTER[0], ARENA_CENTER[1]  # arena center
@@ -546,22 +547,7 @@ class MyAssignment:
         }
 
         return mapping.get(sector, None)
-    
-    def estimate_gate_orientation(self, gate_corners, sensor_data):
-        """
-        Estimate the gate's yaw orientation by looking at the vector between the two top corners.
-        Relies on the strict [TL, TR, BR, BL] ordering from estimate_gate_position.
-        """
-        # Because we enforced order in estimate_gate_position, we don't need unstable Z-sorting
-        tl, tr = gate_corners[0], gate_corners[1]
         
-        vec = tr - tl  # Vector pointing left-to-right along the top edge
-        normal = np.array([-vec[1], vec[0], 0])  # Normal vector in the XY plane
-        
-        gate_yaw = np.arctan2(normal[1], normal[0]) 
-        return gate_yaw
-        
-    
     def compute_approach_position(self, gate_center, gate_yaw):
         """
         Returns the 3-D point APPROACH_DIST metres behind the drone's facing
@@ -582,7 +568,28 @@ class MyAssignment:
         return np.array([gate_center[0] + offset_x,
                          gate_center[1] + offset_y,
                          gate_center[2]])
+
+    # --------------- Pause helpers ---------------
+    def start_pause(self, duration, next_mode):
+        self.pause_start_time = time.time()
+        self.pause_duration = duration
+        self.post_pause_mode = next_mode
+
+    def is_pausing(self):
+        if self.pause_start_time is None:
+            return False
+        if time.time() - self.pause_start_time < self.pause_duration:
+            return True
+        # Pause over — transition
+        print("Mode: Take Second Photo - Finished pause, taking second photo now")
+        self.mode = self.post_pause_mode
+        self.ready_to_take_second_photo = True
+        self.pause_start_time = None
+        self.pause_duration = None
+        self.post_pause_mode = None
+        return False
     
+    # --------------- Geometry helpers ---------------
     def get_camera_position_in_world(self, sensor_data):
         """Get the world position of the camera given drone sensor data."""
         drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
@@ -620,27 +627,8 @@ class MyAssignment:
         vz = F_PIXELS
 
         return np.array([vx, vy, vz], dtype=float)
-
-    def locate_gates(self, camera_data):
-        # TODO - call get image and locate corners in image
-        lower, upper = self.rgb_to_hsv_bounds(r=gates_r_value, g=gates_g_value, b=gates_b_value)
-        gates = self.locate_pink_area(camera_data, lower, upper)
-
-        if gates is None:
-            return None
-
-        # Filter to only gates with exactly 4 corners
-        valid_gates = [g for g in gates if len(g) == 4]
-
-        if not valid_gates:
-            return None
-
-        for points in valid_gates:
-            self.gate_detection_img = camera_data.copy()
-            self.gate_detection_img = cv2.polylines(self.gate_detection_img, [points], isClosed=True, color=(0, 255, 0), thickness=2)
-
-        return valid_gates # list of polygons, or None
     
+    # --------------- Image processing helpers ---------------
     def locate_pink_area(self, image, lower_pink, upper_pink, min_area=100):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, lower_pink, upper_pink)
