@@ -153,6 +153,7 @@ class MyAssignment:
         self.trajectory_waypoints = []
         self.current_waypoint_index = 0
         self.current_waypoint = None
+        self.current_traj_gate_number = 0
 
     def compute_command(self, sensor_data, camera_data, dt):
         # NOTE: Displaying the camera image with cv2.imshow() will throw an error because GUI operations should be performed in the main thread.
@@ -351,6 +352,7 @@ class MyAssignment:
             abs(sensor_data['y_global'] - HOME_POSITION[1]) < pos_eps and
             abs(sensor_data['z_global'] - HOME_POSITION[2]) < pos_eps):
             self.mode = Mode.EXECUTE_TRAJECTORY
+            self.current_traj_gate_number = 0
             print("Mode: Execute Trajectory (inside get_go_home_command)")
             self.trajectory_waypoints = self.compute_trajectory() # TODO - could also change this to now return the compute trajectory command
         return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
@@ -372,50 +374,19 @@ class MyAssignment:
         the trajectory. Each call finds the closest waypoint to the drone, then
         advances the target by WAYPOINT_ADVANCE_DIST worth of waypoints.
         """
-        if not hasattr(self, 'trajectory_waypoints') or len(self.trajectory_waypoints) == 0:
-            print("No trajectory computed yet - computing it now")
-            self.trajectory_waypoints = self.compute_trajectory() 
-            return [sensor_data['x_global'], sensor_data['y_global'],
-                    sensor_data['z_global'], sensor_data['yaw']] # TODO - could also change this to now return the compute trajectory command
+        center, yaw = self.gate_center_poses_dict[self.current_traj_gate_number]
+        if (abs(sensor_data['x_global'] - center[0]) < pos_eps and
+            abs(sensor_data['y_global'] - center[1]) < pos_eps and
+            abs(sensor_data['z_global'] - center[2]) < pos_eps):
+            # We are at the current gate center, time to move to the next one
+            if (self.current_traj_gate_number >= 4): # Since we're zero indexed, after flying through gate 4 we are done
+                self.mode = Mode.GO_HOME
+                print("Mode: Go Home")
+                return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
+            else:
+                self.current_traj_gate_number += 1
 
-        drone_pos = np.array([sensor_data['x_global'],
-                            sensor_data['y_global'],
-                            sensor_data['z_global']])
-
-        # Find the closest waypoint to the drone at or ahead of current index
-        # (avoids snapping backwards if drone overshoots)
-        closest_idx = self.current_waypoint_index
-        closest_dist = np.linalg.norm(self.trajectory_waypoints[closest_idx] - drone_pos)
-        for i in range(self.current_waypoint_index, min(self.current_waypoint_index + 20,
-                                                        len(self.trajectory_waypoints))):
-            d = np.linalg.norm(self.trajectory_waypoints[i] - drone_pos)
-            if d < closest_dist:
-                closest_dist = d
-                closest_idx = i
-
-        # Advance the target waypoint by WAYPOINT_ADVANCE_DIST past the closest point
-        steps_ahead = max(1, int(WAYPOINT_ADVANCE_DIST / WAYPOINT_SPACING))
-        target_idx = min(closest_idx + steps_ahead, len(self.trajectory_waypoints) - 1)
-
-        self.current_waypoint_index = closest_idx
-        self.current_waypoint = self.trajectory_waypoints[target_idx]
-
-        # Compute yaw to face the next waypoint
-        if target_idx + 1 < len(self.trajectory_waypoints):
-            next_wp = self.trajectory_waypoints[target_idx + 1]
-            delta = next_wp - self.current_waypoint
-            target_yaw = np.arctan2(delta[1], delta[0])
-        else:
-            target_yaw = sensor_data['yaw']  # hold yaw at end of trajectory
-
-        # Check if we've reached the end of the trajectory
-        dist_to_end = np.linalg.norm(self.trajectory_waypoints[-1] - drone_pos)
-        if dist_to_end < pos_eps:
-            print("Trajectory complete")
-            self.mode = Mode.LAND
-
-        return [self.current_waypoint[0], self.current_waypoint[1],
-                self.current_waypoint[2], target_yaw]
+        return [center[0], center[1], center[2], yaw]
 
 
     # ------------------------------------------------------------------
