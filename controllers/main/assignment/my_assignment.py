@@ -51,7 +51,7 @@ GATE_HEIGHT = 0.4 # In meters
 
 # Rotation amounts
 search_gate_rotation = 0.15
-search_gate_translation = 0.8 # TODO - change back to 0.25 for final
+search_gate_translation = 0.4 # TODO - change back to 0.25 for final
 
 # Approach distance
 APPROACH_DIST = 0.8  # metres in front of gate to take measurement
@@ -65,8 +65,8 @@ pos_eps = 0.05 # Allow 5cm variation in approaching gate
 edge_threshold = 10  # Used to check if the detected gate is at the edge (pixels tolerance from edge)
 
 # Pause durations
-PAUSE_AT_MEASUREMENT_POS = 1.5  # TODO - change back to 3.0 for final seconds — wait before taking 2nd photo
-PAUSE_AT_GATE_CENTER     = 1.0  # TODO - change back to 1.5 for final seconds — wait after reaching gate center
+PAUSE_AT_MEASUREMENT_POS = 2.5  # TODO - change back to 3.0 for final seconds — wait before taking 2nd photo
+PAUSE_AT_GATE_CENTER     = 1.5  # TODO - change back to 1.5 for final seconds — wait after reaching gate center
 
 # Camera constants
 CAM_FOV = 1.5  # radians
@@ -500,7 +500,23 @@ class MyAssignment:
             accumulated_dist += step_dist
             target_idx += 1
 
-        target_pos = self.trajectory_waypoints[target_idx]
+        # MUST use .copy() so we don't permanently deform the stored trajectory array!
+        target_pos = self.trajectory_waypoints[target_idx].copy() 
+
+        # --- THE FIX: Z-AXIS SPLINE BELLY CLAMPING ---
+        # If the target point is within the horizontal threshold of the active gate,
+        # override the polynomial's Z-axis and clamp it to the exact gate height.
+        if self.current_traj_gate_number < len(gate_keys):
+            active_gate_key = gate_keys[self.current_traj_gate_number]
+            gate_center, _ = self.gate_center_poses_dict[active_gate_key]
+            
+            # Check how close our steering 'carrot' is to the gate horizontally
+            dist_xy_to_gate = np.linalg.norm(target_pos[:2] - gate_center[:2])
+            
+            # If the carrot is within 1.0m of the gate (covering the pre/post alignment zones)
+            if dist_xy_to_gate < 1.0:
+                # Erase the mathematical dip and force a perfectly flat flight path
+                target_pos[2] = gate_center[2]
 
         # --- 5. Calculate target yaw to look slightly further ahead ---
         yaw_lookahead_idx = min(target_idx + int(0.8 / TRAJ_DT), len(self.trajectory_waypoints) - 1)
@@ -546,14 +562,12 @@ class MyAssignment:
         touching_top = any(y <= edge_threshold for x, y in target_gate)
         touching_bottom = any(y >= image_height - edge_threshold for x, y in target_gate)
 
-        if touching_left and not touching_right:
-            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
-        elif touching_right and not touching_left:
-            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] - search_gate_rotation]
-        elif touching_top and not touching_bottom:
+        if touching_top and not touching_bottom:
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'] + search_gate_translation, sensor_data['yaw']]
+            
         elif touching_bottom and not touching_top:
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'] - search_gate_translation, sensor_data['yaw']]
+            
         elif touching_top and touching_bottom:
             # Calculate the backward translation components using the current yaw
             backward_dx = -np.cos(sensor_data['yaw']) * search_gate_translation
@@ -565,6 +579,29 @@ class MyAssignment:
                 sensor_data['z_global'], 
                 sensor_data['yaw']
             ]
+
+        elif touching_left and not touching_right:
+            # Travel towards the arena center instead of rotating
+            drone_pos_xy = np.array([sensor_data['x_global'], sensor_data['y_global']])
+            to_center = ARENA_CENTER - drone_pos_xy
+            norm = np.linalg.norm(to_center)
+            
+            # Prevent division by zero if already exactly at the center
+            if norm > 1e-4:
+                inward_dir = to_center / norm
+            else:
+                inward_dir = np.array([0.0, 0.0])
+                
+            return [
+                sensor_data['x_global'] + inward_dir[0] * search_gate_translation,
+                sensor_data['y_global'] + inward_dir[1] * search_gate_translation,
+                sensor_data['z_global'], 
+                sensor_data['yaw']
+            ]
+            
+        elif touching_right and not touching_left:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] - search_gate_rotation]
+            
         else:
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
 
@@ -880,34 +917,35 @@ class MyAssignment:
             dist_xy = np.sqrt(dx**2 + dy**2)
             t_xy = dist_xy / TRAJ_SPEED
             
-            # --- TWEAK 1: Asymmetric Vertical Speeds ---
-            # Climbing requires thrust, dropping requires braking. 
-            # We force the planner to allocate MORE time to drops, which slows 
-            # the drone's horizontal speed and prevents it from gliding over the gate.
             if dz > 0:
-                t_z = dz / 0.5   # Max climb speed
+                t_z = dz / 0.4   # Max climb speed
             else:
-                t_z = abs(dz) / 0.3  # Max drop speed (Slower = steeper, safer descent!)
+                t_z = abs(dz) / 0.3  # Max drop speed
                 
             t_seg = max(t_xy, t_z)
             
-            # 2. Add cornering time at the START of the segment
-            if i > 0:
-                p_prev = np.array(key_points[i-1])
-                vec_in = p_curr - p_prev
-                t_seg += get_turn_penalty(vec_in, vec_fwd) * 0.5 
+            # --- THE FIX: STRUCTURAL TRANSIT DETECTION ---
+            # Using modulo 3, we guarantee we ONLY apply corner penalties 
+            # to the transit segments between gates, even if the gates are right next to each other!
+            if i % 3 == 0:
                 
-            # 3. Add cornering time at the END of the segment
-            if i < n_segs - 1:
-                p_next_next = np.array(key_points[i+2])
-                vec_out = p_next_next - p_next
-                t_seg += get_turn_penalty(vec_fwd, vec_out) * 0.5 
+                # Start of transit corner (Skip for the very first segment leaving Home)
+                if i > 0:
+                    p_prev = np.array(key_points[i-1])
+                    vec_in = p_curr - p_prev
+                    # Apply the FULL penalty to the transit segment
+                    t_seg += get_turn_penalty(vec_in, vec_fwd) 
+                    
+                # End of transit corner (Skip for the very last segment arriving Home)
+                if i < n_segs - 1:
+                    p_next_next = np.array(key_points[i+2])
+                    vec_out = p_next_next - p_next
+                    # Apply the FULL penalty to the transit segment
+                    t_seg += get_turn_penalty(vec_fwd, vec_out) 
                 
-            # --- TWEAK 2: Anti-Ringing Time Floor ---
-            # Raise the minimum time from 0.25s to 0.4s. Giving the alignment 
-            # segment slightly more time acts as a buffer, preventing the polynomial 
-            # from bulging/looping after a massive drop.
-            seg_times.append(max(t_seg, 0.4))
+            # Anti-Ringing Time Floor
+            # This ensures short alignment segments use their raw decoupled time (~0.16s)
+            seg_times.append(max(t_seg, 0.1))
 
         # Iteratively reduce times while checking dynamic limits
         for _ in range(20):  # max 20 reduction iterations
