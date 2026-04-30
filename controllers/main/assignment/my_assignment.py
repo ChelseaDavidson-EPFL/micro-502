@@ -125,16 +125,16 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
     _entry['inward_dir'] = _to_center / np.linalg.norm(_to_center)  # unit vector toward arena center
 
 # Trajectory constants
-TRAJ_SPEED = 2.5          # INCREASE: Command a much faster base trajectory time
+TRAJ_SPEED = 4.0          # INCREASED from 2.5 to 4.0 m/s
 MAX_VELOCITY = 7.0        
 MAX_ACCELERATION = 5.0    
-TRAJ_DT = 0.02            # CHANGE: Back to 0.02. 0.01 creates too many array points and slows down real-time search 
+TRAJ_DT = 0.02           
 
-# Tuning parameters for adaptive lookahead
-DIST_NEAR = 0.5   # Get closer before hitting minimum lookahead
-DIST_FAR = 1.5    # Start smoothly braking much earlier
-LOOKAHEAD_MIN = 0.4
-LOOKAHEAD_MAX = 1.8 # Push the max lookahead further for aggressive straightaway speed
+# Tuning parameters for adaptive lookahead in trajectory execution
+DIST_NEAR = 0.6   # Slightly wider precision bubble
+DIST_FAR = 2.0    # Look much further ahead on straightaways
+LOOKAHEAD_MIN = 0.5 # INCREASED from 0.4. Maintains a bit more momentum through the gate
+LOOKAHEAD_MAX = 2.2 # INCREASED to match the new 4.0 m/s TRAJ_SPEED
 
 class MyAssignment:
     def __init__(self, ):
@@ -430,7 +430,7 @@ class MyAssignment:
             # THE FIX: Keep the forgiving 1.0m horizontal cylinder, but relax the 
             # vertical limit slightly to 0.75m in case the drone skims the bottom of the hoop!
             if (np.dot(vec_to_drone, dir_vec) > 0 and 
-                np.linalg.norm(vec_to_drone[:2]) < 1.0 and 
+                np.linalg.norm(vec_to_drone[:2]) < 1.5 and 
                 abs(vec_to_drone[2]) < 0.75):
                 
                 self.current_traj_gate_number += 1
@@ -871,14 +871,15 @@ class MyAssignment:
             center, gate_yaw = self.gate_center_poses_dict[gate_idx]
             
             # Add a waypoint 0.5m before the gate to force approach at correct height
+            ALIGN_DIST = 0.4
             pre_gate = center.copy()
-            pre_gate[0] -= np.cos(gate_yaw) * 0.5
-            pre_gate[1] -= np.sin(gate_yaw) * 0.5
+            pre_gate[0] -= np.cos(gate_yaw) * ALIGN_DIST
+            pre_gate[1] -= np.sin(gate_yaw) * ALIGN_DIST
             
             # Add a waypoint 0.5m after the gate to force exit at correct height  
             post_gate = center.copy()
-            post_gate[0] += np.cos(gate_yaw) * 0.5
-            post_gate[1] += np.sin(gate_yaw) * 0.5
+            post_gate[0] += np.cos(gate_yaw) * ALIGN_DIST
+            post_gate[1] += np.sin(gate_yaw) * ALIGN_DIST
             
             key_points.append(pre_gate)
             key_points.append(center.copy())   # gate center itself — polynomial must pass exactly here
@@ -917,14 +918,12 @@ class MyAssignment:
             dist_xy = np.sqrt(dx**2 + dy**2)
             t_xy = dist_xy / TRAJ_SPEED
             
-            # --- TWEAK 1: Asymmetric Vertical Speeds ---
-            # Climbing requires thrust, dropping requires braking. 
-            # We force the planner to allocate MORE time to drops, which slows 
-            # the drone's horizontal speed and prevents it from gliding over the gate.
+            # --- THE SPEED FIX: Relax the Vertical Limits ---
+            # Drones can climb and fall much faster than 0.3 m/s!
             if dz > 0:
-                t_z = dz / 0.5   # Max climb speed
+                t_z = dz / 1.0   # INCREASED Max climb speed
             else:
-                t_z = abs(dz) / 0.3  # Max drop speed (Slower = steeper, safer descent!)
+                t_z = abs(dz) / 0.8  # INCREASED Max drop speed
                 
             t_seg = max(t_xy, t_z)
             
@@ -1231,16 +1230,15 @@ def get_turn_penalty(vec_in, vec_out):
     norm_in = np.linalg.norm(vec_in)
     norm_out = np.linalg.norm(vec_out)
     
-    # Avoid division by zero if waypoints are identical
     if norm_in < 1e-4 or norm_out < 1e-4:
         return 0.0
         
-    # 3D Dot Product to find the angle
     cos_theta = np.clip(np.dot(vec_in, vec_out) / (norm_in * norm_out), -1.0, 1.0)
-    theta = np.arccos(cos_theta) # Returns 0 (straight) to pi (180-degree u-turn)
+    theta = np.arccos(cos_theta) 
     
-    # MAXIMUM PENALTY: How much total time to add for a full 180-degree hairpin turn.
-    # A 90-degree corner will automatically apply half of this penalty.
-    MAX_TURN_PENALTY = 1.0 
+    # --- THE SPEED FIX: Reduce the Cornering Penalty ---
+    # Down from 1.0s. Forces the drone to take corners faster 
+    # instead of heavily braking.
+    MAX_TURN_PENALTY = 0.5 
     
     return (theta / np.pi) * MAX_TURN_PENALTY
