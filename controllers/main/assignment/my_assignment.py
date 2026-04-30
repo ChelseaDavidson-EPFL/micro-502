@@ -435,10 +435,10 @@ class MyAssignment:
             target_dist = float('inf') # Force max lookahead
 
         # Tuning parameters for adaptive lookahead
-        DIST_NEAR = 0.4  
+        DIST_NEAR = 0.8  
         DIST_FAR = 1.0   
         LOOKAHEAD_MIN = 0.4
-        LOOKAHEAD_MAX = 1.6
+        LOOKAHEAD_MAX = 1.5
 
         if target_dist <= DIST_NEAR:
             dynamic_lookahead = LOOKAHEAD_MIN
