@@ -127,7 +127,13 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
 TRAJ_SPEED = 1.5          # target average speed m/s — used to set segment times
 MAX_VELOCITY = 2.0        # m/s — dynamical limit check
 MAX_ACCELERATION = 3.0    # m/s^2 — dynamical limit check
-TRAJ_DT = 0.02           # seconds between sampled trajectory points for evaluation
+TRAJ_DT = 0.01           # seconds between sampled trajectory points for evaluation
+
+# Tuning parameters for adaptive lookahead in trajectory execution
+DIST_NEAR = 0.8  
+DIST_FAR = 1.0   
+LOOKAHEAD_MIN = 0.4
+LOOKAHEAD_MAX = 1.4
 
 class MyAssignment:
     def __init__(self, ):
@@ -433,12 +439,6 @@ class MyAssignment:
         else:
             # All gates passed, heading to HOME point. 
             target_dist = float('inf') # Force max lookahead
-
-        # Tuning parameters for adaptive lookahead
-        DIST_NEAR = 0.8  
-        DIST_FAR = 1.0   
-        LOOKAHEAD_MIN = 0.4
-        LOOKAHEAD_MAX = 1.5
 
         if target_dist <= DIST_NEAR:
             dynamic_lookahead = LOOKAHEAD_MIN
@@ -799,7 +799,7 @@ class MyAssignment:
         key_points = [HOME_POSITION.copy()]
         
         # INCREASE THIS: Distance to place the pre- and post-waypoints
-        ALIGN_DIST = 0.6 
+        ALIGN_DIST = 1.0
         
         for gate_idx in sorted(self.gate_center_poses_dict.keys()):
             center, yaw = self.gate_center_poses_dict[gate_idx]
