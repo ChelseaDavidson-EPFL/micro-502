@@ -125,8 +125,8 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
 
 # Trajectory constants
 TRAJ_SPEED = 1.5          # target average speed m/s — used to set segment times
-MAX_VELOCITY = 2.0        # m/s — dynamical limit check
-MAX_ACCELERATION = 3.0    # m/s^2 — dynamical limit check
+MAX_VELOCITY = 7.0        # m/s — dynamical limit check
+MAX_ACCELERATION = 5.0    # m/s^2 — dynamical limit check
 TRAJ_DT = 0.01           # seconds between sampled trajectory points for evaluation
 
 # Tuning parameters for adaptive lookahead in trajectory execution
@@ -796,7 +796,11 @@ class MyAssignment:
         """
         Build ordered list of key waypoints: home -> pre-gate -> gate -> post-gate -> home.
         """
-        key_points = [HOME_POSITION.copy()]
+        target_x = HOME_POSITION[0]
+        target_y = HOME_POSITION[1]
+        target_z = self.gate_center_poses[0][0][2] 
+
+        key_points = [(target_x, target_y, target_z)]  # Start at home position at the height of the first gate center
         
         # INCREASE THIS: Distance to place the pre- and post-waypoints
         ALIGN_DIST = 1.0
