@@ -124,16 +124,16 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
     _entry['inward_dir'] = _to_center / np.linalg.norm(_to_center)  # unit vector toward arena center
 
 # Trajectory constants
-TRAJ_SPEED = 1.5          # target average speed m/s — used to set segment times
-MAX_VELOCITY = 7.0        # m/s — dynamical limit check
-MAX_ACCELERATION = 5.0    # m/s^2 — dynamical limit check
-TRAJ_DT = 0.01           # seconds between sampled trajectory points for evaluation
+TRAJ_SPEED = 2.5          # INCREASE: Command a much faster base trajectory time
+MAX_VELOCITY = 7.0        
+MAX_ACCELERATION = 5.0    
+TRAJ_DT = 0.02            # CHANGE: Back to 0.02. 0.01 creates too many array points and slows down real-time search 
 
-# Tuning parameters for adaptive lookahead in trajectory execution
-DIST_NEAR = 0.8  
-DIST_FAR = 1.0   
+# Tuning parameters for adaptive lookahead
+DIST_NEAR = 0.5   # Get closer before hitting minimum lookahead
+DIST_FAR = 1.5    # Start smoothly braking much earlier
 LOOKAHEAD_MIN = 0.4
-LOOKAHEAD_MAX = 1.4
+LOOKAHEAD_MAX = 1.8 # Push the max lookahead further for aggressive straightaway speed
 
 class MyAssignment:
     def __init__(self, ):
@@ -803,7 +803,7 @@ class MyAssignment:
         key_points = [(target_x, target_y, target_z)]  # Start at home position at the height of the first gate center
         
         # INCREASE THIS: Distance to place the pre- and post-waypoints
-        ALIGN_DIST = 1.0
+        ALIGN_DIST = 0.4
         
         for gate_idx in sorted(self.gate_center_poses_dict.keys()):
             center, yaw = self.gate_center_poses_dict[gate_idx]
@@ -839,8 +839,8 @@ class MyAssignment:
         seg_times = []
         for i in range(n_segs):
             dist = np.linalg.norm(np.array(key_points[i+1]) - np.array(key_points[i]))
-            # REDUCE THIS minimum time from 0.5 to 0.1 so small alignment segments don't act as brakes
-            seg_times.append(max(dist / TRAJ_SPEED, 0.1)) 
+            # REDUCE THIS floor to 0.05 so tight alignment waypoints don't act as brakes
+            seg_times.append(max(dist / TRAJ_SPEED, 0.05))
 
         # Iteratively reduce times while checking dynamic limits
         for _ in range(20):  # max 20 reduction iterations
