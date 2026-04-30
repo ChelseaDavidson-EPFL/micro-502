@@ -423,13 +423,22 @@ class MyAssignment:
             active_gate_key = gate_keys[self.current_traj_gate_number]
             gate_center, gate_yaw = self.gate_center_poses_dict[active_gate_key]
             
-           # Check if we have crossed the gate's plane
+            # The direction the gate is facing
             dir_vec = np.array([np.cos(gate_yaw), np.sin(gate_yaw), 0.0])
             vec_to_drone = drone_pos - gate_center
             
-            # THE FIX: Keep the forgiving 1.0m horizontal cylinder, but relax the 
-            # vertical limit slightly to 0.75m in case the drone skims the bottom of the hoop!
-            if (np.dot(vec_to_drone, dir_vec) > 0 and 
+            # --- THE FIX: Use Sensor Data to verify we are safely THROUGH the gate ---
+            # 1. Project position: How many meters PAST the gate plane are we?
+            forward_dist = np.dot(vec_to_drone, dir_vec)
+            
+            # 2. Project velocity: Is the drone physically moving forward out the exit?
+            drone_vel = np.array([sensor_data['v_x'], sensor_data['v_y'], sensor_data['v_z']])
+            is_moving_forward = np.dot(drone_vel, dir_vec) > 0
+            
+            # Trigger passage ONLY if we are at least 0.25 meters past the center plane,
+            # moving in the right direction, and inside the hoop threshold.
+            if (forward_dist > 0.1 and 
+                is_moving_forward and
                 np.linalg.norm(vec_to_drone[:2]) < 1.5 and 
                 abs(vec_to_drone[2]) < 0.75):
                 
@@ -920,10 +929,11 @@ class MyAssignment:
             
             # --- THE SPEED FIX: Relax the Vertical Limits ---
             # Drones can climb and fall much faster than 0.3 m/s!
+            # --- HYPER-AGGRESSIVE VERTICAL LIMITS ---
             if dz > 0:
-                t_z = dz / 1.0   # INCREASED Max climb speed
+                t_z = dz / 1.5   # Up from 1.0 m/s. Punch the throttle!
             else:
-                t_z = abs(dz) / 0.8  # INCREASED Max drop speed
+                t_z = abs(dz) / 1.2  # Up from 0.8 m/s. Free-fall into the low gates!
                 
             t_seg = max(t_xy, t_z)
             
@@ -1239,6 +1249,6 @@ def get_turn_penalty(vec_in, vec_out):
     # --- THE SPEED FIX: Reduce the Cornering Penalty ---
     # Down from 1.0s. Forces the drone to take corners faster 
     # instead of heavily braking.
-    MAX_TURN_PENALTY = 0.5 
+    MAX_TURN_PENALTY = MAX_TURN_PENALTY = 0.2
     
     return (theta / np.pi) * MAX_TURN_PENALTY
