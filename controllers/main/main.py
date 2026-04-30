@@ -18,6 +18,29 @@ exp_num = 4                    # 0: Coordinate Transformation, 1: PID Tuning, 2:
 control_style = 'path_planner'      # 'keyboard' or 'path_planner'
 rand_env = True                # Randomise the environment
 
+# 1. Let Python generate a random integer for the seed
+# (Before we lock it, Python uses your computer's unpredictable system time)
+my_seed = random.randint(0, 9999999)
+# my_seed = 5541020
+
+# --- REPLAY MODE ---
+# If your drone crashes and you need to replay the exact same environment,
+# comment out the line above and uncomment the line below, replacing it with the printed seed:
+# my_seed = 1234567 
+
+# 2. Print the seed to your console immediately
+fout = open("data.txt", "a")
+fout.write("\n----------------------------------\n")
+fout.write(f"Time of run: {time.ctime()}\n")
+fout.write(f"Seed: {my_seed}\n")
+fout.close()
+
+# print(f"Current Python Random Seed: {my_seed}")
+
+# 3. Apply this run's seed to the random number generators
+random.seed(my_seed)
+np.random.seed(my_seed)
+
 # Global variables for handling threads
 latest_sensor_data = None
 latest_camera_data = None
@@ -336,6 +359,12 @@ class CrazyflieInDroneDome(Supervisor):
         if drone.lap == drone.num_laps:
             print("Lap times:", drone.lap_times)
             print("Gate progress:", drone.gate_progress)
+
+            fout = open("data.txt", "a")
+            fout.write(f"Lap times: {drone.lap_times}\n")
+            fout.write(f"Gate progress: {drone.gate_progress}\n")
+            fout.close()
+
             return False
         
         return True
@@ -739,7 +768,8 @@ if __name__ == '__main__':
                     running = drone.track_assignment_progress(sensor_data)
                     
                     # If the drone has completed the assignment, crash the drone
-                    if not running:    
+                    if not running:   
+                        drone.simulationQuit(0) 
                         break
 
                 # Update the PID control time
@@ -748,7 +778,8 @@ if __name__ == '__main__':
 
             # Update the drone status in simulation
             drone.step(motorPower, sensor_data)
-    
+
+        drone.simulationQuit(0)
     except KeyboardInterrupt:
         running = False
         planner_thread.join()

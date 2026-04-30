@@ -90,31 +90,32 @@ SEARCH_RADIUS = 4  # meters from center
 SEARCH_HEIGHT = 1.35  # meters
 
 # Find the gate search positions:
+# Find the gate search positions:
 GATE_SEARCH_POSITIONS = {
     0: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(30))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(30))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians((30 + 180 + 90))%360},   # sector 2 center = 30°
+        'yaw': np.radians((30 + 180 + 90) % 360)},   # sector 2 center = 30°
 
     1: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(90))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(90))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians((90 + 180 + 90))%360},   # sector 4 center = 90°
+        'yaw': np.radians((90 + 180 + 90) % 360)},   # sector 4 center = 90°
 
     2: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(150))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(150))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians((150 + 180 + 90))%360},  # sector 6 center = 150°
+        'yaw': np.radians((150 + 180 + 90) % 360)},  # sector 6 center = 150°
 
     3: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(210))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(210))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians((210 + 180 + 90))%360},  # sector 8 center = 210°
+        'yaw': np.radians((210 + 180 + 90) % 360)},  # sector 8 center = 210°
 
     4: {'pos': np.array([4.0 + SEARCH_RADIUS*(-np.cos(np.radians(270))),
                          4.0 + SEARCH_RADIUS*(-np.sin(np.radians(270))),
                          SEARCH_HEIGHT]),
-        'yaw': np.radians((270 + 180 + 90))%360},  # sector 10 center = 270°
+        'yaw': np.radians((270 + 180 + 90) % 360)},  # sector 10 center = 270°
 }
 
 # Add inward direction vectors to GATE_SEARCH_POSITIONS:
@@ -183,7 +184,7 @@ class MyAssignment:
             if not self.has_taken_off and sensor_data['z_global'] > 0.49:
                 self.has_taken_off = True
                 self.mode = Mode.GO_TO_SEARCH_AREA
-                print("Mode: Go to Search Area")
+                # print("Mode: Go to Search Area")
         # Search for gate command
         elif (self.mode == Mode.GO_TO_SEARCH_AREA):
             control_command = self.get_go_to_search_area_command(sensor_data)
@@ -216,7 +217,7 @@ class MyAssignment:
             abs(sensor_data['z_global'] - target_pos[2]) < pos_eps and
             abs((sensor_data['yaw'] - target_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
             self.mode = Mode.SEARCH_GATE
-            print("Mode: Search Gate")
+            # print("Mode: Search Gate")
 
         return [target_pos[0], target_pos[1], target_pos[2], target_yaw]
 
@@ -240,10 +241,10 @@ class MyAssignment:
             progress = np.dot(displacement, inward_dir)  # metres travelled toward center
 
             if progress >= SEARCH_RADIUS:
-                print("Search: passed arena center without finding gate, resetting to outer edge")
+                # print("Search: passed arena center without finding gate, resetting to outer edge")
                 outer = search_entry['pos']
                 self.mode = Mode.GO_TO_SEARCH_AREA # Go back to search area state to reset position and yaw
-                print("Mode: Go to Search Area (resetting position after passing center)")
+                # print("Mode: Go to Search Area (resetting position after passing center)")
                 return [outer[0], outer[1], outer[2], search_yaw]
 
             # Step: current position + one translation increment toward arena center
@@ -255,7 +256,7 @@ class MyAssignment:
             ]
 
         if self.is_target_gate_not_fully_in_FOV(camera_data, target_gate):
-            print("Search Gate: Target gate not fully in view, adjusting position")
+            # print("Search Gate: Target gate not fully in view, adjusting position")
             return self.adjust_position_for_better_FOV(camera_data, sensor_data, target_gate)
 
         self.target_gate_detection_img = camera_data.copy()
@@ -270,7 +271,7 @@ class MyAssignment:
         self.measurement_target_yaw = gate_yaw
 
         self.mode = Mode.APPROACH_GATE
-        print(f"Mode: Approach Gate — target={approach_pos}, gate_yaw={np.degrees(gate_yaw):.1f}°")
+        # print(f"Mode: Approach Gate — target={approach_pos}, gate_yaw={np.degrees(gate_yaw):.1f}°")
         return [approach_pos[0], approach_pos[1], approach_pos[2], gate_yaw]
 
     def get_approach_gate_command(self, camera_data, sensor_data):
@@ -290,10 +291,11 @@ class MyAssignment:
         # If we are within 10cm of the measurement point, take the new photo
         if dist_to_target < pos_eps and facing_gate:
             self.mode = Mode.TAKE_SECOND_PHOTO
-            print("Mode: Take Second Photo - Pausing to take second photo at measurement position")
+            # print("Mode: Take Second Photo - Pausing to take second photo at measurement position")
             self.start_pause(PAUSE_AT_MEASUREMENT_POS, Mode.TAKE_SECOND_PHOTO) 
         elif dist_to_target < pos_eps and not facing_gate:
-            print(f"Approach: at position but yaw not settled yet (error={np.degrees(yaw_error):.1f}°), waiting")
+            pass
+            # print(f"Approach: at position but yaw not settled yet (error={np.degrees(yaw_error):.1f}°), waiting")
             
         # Either way, fly to the 0.8m mark
         return [self.measurement_target_pos[0], self.measurement_target_pos[1], self.measurement_target_pos[2], self.measurement_target_yaw]
@@ -312,11 +314,11 @@ class MyAssignment:
             # If we lost the gate, go back to searching
             self.mode = Mode.GO_TO_SEARCH_AREA
             self.ready_to_take_second_photo = False
-            print("Mode: Go to search area (gate lost at measurement pos)")
+            # print("Mode: Go to search area (gate lost at measurement pos)")
             return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw'] + search_gate_rotation]
         
         if self.is_target_gate_not_fully_in_FOV(camera_data, target_gate):
-            print("Second photo: Target gate not fully in view, adjusting position")
+            # print("Second photo: Target gate not fully in view, adjusting position")
             return self.adjust_position_for_better_FOV(camera_data, sensor_data, target_gate)
         
         # gate_corners = self.estimate_gate_position(target_gate, sensor_data)
@@ -331,17 +333,18 @@ class MyAssignment:
 
             # Store them for later laps so we know where each gate is based on its index in the circle - accounts for any gates we may have missed on the first lap and ensures we can fly through in the correct order around the circle
             gate_index = self.get_gate_index_from_position(center)
-            print(f"Detected gate center at {center}, gate index: {gate_index}")
+            # print(f"Detected gate center at {center}, gate index: {gate_index}")
             if gate_index is not None:
                 self.gate_corners_dict[gate_index] = gate_corners
                 self.gate_center_poses_dict[gate_index] = (center, gate_yaw)
             else:
-                print("Warning: Detected gate does not fall within any known gate index based on its position, it will not be stored for later laps")
-            print(f"Final High-Accuracy Gate Center: {center}")
-            print(f"Final High-Accuracy Gate Yaw: {np.degrees(gate_yaw):.1f}°")
+                # print("Warning: Detected gate does not fall within any known gate index based on its position, it will not be stored for later laps")
+                pass
+            # print(f"Final High-Accuracy Gate Center: {center}")
+            # print(f"Final High-Accuracy Gate Yaw: {np.degrees(gate_yaw):.1f}°")
 
             self.mode = Mode.FLY_THROUGH_GATE
-            print("Mode: Fly Through Gate")
+            # print("Mode: Fly Through Gate")
             return [center[0], center[1], center[2], gate_yaw] # Don't set it as 0.1m beyond yet - we'll do that in the fly through state to ensure we are stable at the gate center before flying through        
 
     def get_fly_through_gate_command(self, sensor_data):
@@ -361,7 +364,7 @@ class MyAssignment:
             # We are cleanly through the gate, move to next one
             self.current_gate_number += 1
             self.mode = Mode.GO_TO_SEARCH_AREA
-            print("Mode: Search Gate")
+            # print("Mode: Search Gate")
         
         return [target_x, target_y, target_z, gate_yaw]
     
@@ -371,18 +374,19 @@ class MyAssignment:
             abs(sensor_data['z_global'] - HOME_POSITION[2]) < pos_eps):
             self.mode = Mode.READY_TO_EXECUTE_TRAJECTORY
             self.current_traj_gate_number = 0
-            print("Mode: Ready to Execute Trajectory (inside get_go_home_command)")
+            # print("Mode: Ready to Execute Trajectory (inside get_go_home_command)")
             self.trajectory_waypoints = self.compute_trajectory() # TODO - could also change this to now return the compute trajectory command
         return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
     
     def get_land_command(self):
-        print("Completed all gates, stored values are:")
+        # print("Completed all gates, stored values are:")
         for gate_idx in range(5):
             if gate_idx in self.gate_center_poses_dict:
                 center, yaw = self.gate_center_poses_dict[gate_idx]
-                print(f"Gate {gate_idx}: Center = {center}, Yaw = {yaw}")
+                # print(f"Gate {gate_idx}: Center = {center}, Yaw = {yaw}")
             else:
-                print(f"Gate {gate_idx}: NOT DETECTED")
+                # print(f"Gate {gate_idx}: NOT DETECTED")
+                pass
         return [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
 
     def get_ready_to_execute_trajectory_command(self, sensor_data):
@@ -397,7 +401,7 @@ class MyAssignment:
             self.traj_start_time = None  
             self.current_waypoint_index = 0 # ADD THIS: Reset index for spatial tracking
             self.mode = Mode.EXECUTE_TRAJECTORY
-            print("Mode: Execute Trajectory")
+            # print("Mode: Execute Trajectory")
         return [sensor_data['x_global'], sensor_data['y_global'], target_z, target_yaw]
 
     def get_execute_trajectory_command(self, sensor_data):
@@ -406,7 +410,7 @@ class MyAssignment:
         trajectory and looks ahead dynamically. Lookahead shrinks near the *active* target gate for precision and expands once passed for speed.
         """
         if not hasattr(self, 'trajectory_waypoints') or not self.trajectory_waypoints:
-            print("No polynomial trajectory computed")
+            # print("No polynomial trajectory computed")
             return [sensor_data['x_global'], sensor_data['y_global'],
                     sensor_data['z_global'], sensor_data['yaw']]
 
@@ -429,28 +433,10 @@ class MyAssignment:
             # (< 1.5m) to prevent false triggers from across the arena.
             if np.dot(vec_to_drone, dir_vec) > 0 and np.linalg.norm(vec_to_drone) < 1.5:
                 self.current_traj_gate_number += 1
-                print(f"Passed Gate {active_gate_key}! Throttling up for the next one.")
+                # print(f"Passed Gate {active_gate_key}! Throttling up for the next one.")
 
-        # --- 2. Calculate Dynamic Lookahead to the NEXT Target Gate ---
-        if self.current_traj_gate_number < len(gate_keys):
-            active_gate_key = gate_keys[self.current_traj_gate_number]
-            gate_center, _ = self.gate_center_poses_dict[active_gate_key]
-            target_dist = np.linalg.norm(gate_center - drone_pos)
-        else:
-            # All gates passed, heading to HOME point. 
-            target_dist = float('inf') # Force max lookahead
-
-        if target_dist <= DIST_NEAR:
-            dynamic_lookahead = LOOKAHEAD_MIN
-        elif target_dist >= DIST_FAR:
-            dynamic_lookahead = LOOKAHEAD_MAX
-        else:
-            # Smoothly interpolate between min and max lookahead for medium distances
-            ratio = (target_dist - DIST_NEAR) / (DIST_FAR - DIST_NEAR)
-            dynamic_lookahead = LOOKAHEAD_MIN + ratio * (LOOKAHEAD_MAX - LOOKAHEAD_MIN)
-
-        # --- 3. Find the closest point on the trajectory ---
-        search_window = int(1.5 / TRAJ_DT) 
+        # --- (Old Section 3) Find the closest point on the trajectory ---
+        search_window = int(3.0 / TRAJ_DT) 
         start_idx = getattr(self, 'current_waypoint_index', 0)
         end_idx = min(start_idx + search_window, len(self.trajectory_waypoints))
         
@@ -464,6 +450,48 @@ class MyAssignment:
                 
         self.current_waypoint_index = best_idx
 
+        # --- (New Section 2) Calculate Dynamic Lookahead: CURVATURE + GATE PROXIMITY ---
+        
+        # Part A: Curvature Check (slows down for sharp turns)
+        idx_ahead_1 = min(best_idx + int(0.3 / TRAJ_DT), len(self.trajectory_waypoints) - 1)
+        idx_ahead_2 = min(best_idx + int(0.8 / TRAJ_DT), len(self.trajectory_waypoints) - 1)
+        
+        vec1 = self.trajectory_waypoints[idx_ahead_1] - self.trajectory_waypoints[best_idx]
+        vec2 = self.trajectory_waypoints[idx_ahead_2] - self.trajectory_waypoints[idx_ahead_1]
+        
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
+        
+        if norm1 > 0.01 and norm2 > 0.01:
+            cos_theta = np.clip(np.dot(vec1, vec2) / (norm1 * norm2), -1.0, 1.0)
+            theta = np.arccos(cos_theta)  
+        else:
+            theta = 0.0
+            
+        turn_severity = np.clip(theta / (np.pi / 2.0), 0.0, 1.0)
+        curve_lookahead = LOOKAHEAD_MAX - (turn_severity * (LOOKAHEAD_MAX - LOOKAHEAD_MIN))
+
+        # Part B: Gate Proximity Check (forces precision through straight gates)
+        if self.current_traj_gate_number < len(gate_keys):
+            active_gate_key = gate_keys[self.current_traj_gate_number]
+            gate_center, _ = self.gate_center_poses_dict[active_gate_key]
+            dist_to_gate = np.linalg.norm(gate_center - drone_pos)
+            
+            # Shrink lookahead as we get close to the gate
+            if dist_to_gate <= DIST_NEAR:
+                gate_lookahead = LOOKAHEAD_MIN
+            elif dist_to_gate >= DIST_FAR:
+                gate_lookahead = LOOKAHEAD_MAX
+            else:
+                ratio = (dist_to_gate - DIST_NEAR) / (DIST_FAR - DIST_NEAR)
+                gate_lookahead = LOOKAHEAD_MIN + ratio * (LOOKAHEAD_MAX - LOOKAHEAD_MIN)
+        else:
+            gate_lookahead = LOOKAHEAD_MAX
+            
+        # Part C: The Ultimate Lookahead (Always play it safe!)
+        # If there's a sharp turn, OR a gate is close, take the smaller lookahead.
+        dynamic_lookahead = min(curve_lookahead, gate_lookahead)
+
         # --- 4. Trace forward along the path by dynamic_lookahead ---
         target_idx = best_idx
         accumulated_dist = 0.0
@@ -475,7 +503,7 @@ class MyAssignment:
         target_pos = self.trajectory_waypoints[target_idx]
 
         # --- 5. Calculate target yaw to look slightly further ahead ---
-        yaw_lookahead_idx = min(target_idx + int(0.4 / TRAJ_DT), len(self.trajectory_waypoints) - 1)
+        yaw_lookahead_idx = min(target_idx + int(0.8 / TRAJ_DT), len(self.trajectory_waypoints) - 1)
         yaw_pos = self.trajectory_waypoints[yaw_lookahead_idx]
         dir_vec_path = yaw_pos - self.trajectory_waypoints[best_idx]
         
@@ -487,13 +515,11 @@ class MyAssignment:
         # --- 6. Check if trajectory is complete ---
         dist_to_end = np.linalg.norm(self.trajectory_waypoints[-1] - drone_pos)
         if target_idx >= len(self.trajectory_waypoints) - 1 and dist_to_end < 0.2:
-            print("Trajectory complete")
             self.mode = Mode.GO_HOME
-            print("Mode: Go Home")
             return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
 
+        # Return all 3 axes on the exact same dynamic lookahead point!
         return [target_pos[0], target_pos[1], target_pos[2], target_yaw]
-
 
     # ------------------------------------------------------------------
     # Helpers
@@ -580,7 +606,8 @@ class MyAssignment:
             if gate_index == self.current_gate_number:
                 matching_gates.append((gate, corners))
             else:
-                print(f"Detected gate does not match current target gate index (detected index: {gate_index}, target index: {self.current_gate_number}), ignoring this detection")
+                # print(f"Detected gate does not match current target gate index (detected index: {gate_index}, target index: {self.current_gate_number}), ignoring this detection")
+                pass
 
         if not matching_gates:
             return None, None
@@ -708,7 +735,7 @@ class MyAssignment:
         # Snap to the sector with the minimum circular distance
         closest_sector = min(valid_sectors, key=lambda s: sector_dist(sector, s))
         
-        print(f"Warning: Gate detected in unmapped sector {sector}. Snapping to closest valid sector {closest_sector} (Index {mapping[closest_sector]}).")
+        # print(f"Warning: Gate detected in unmapped sector {sector}. Snapping to closest valid sector {closest_sector} (Index {mapping[closest_sector]}).")
         
         return mapping[closest_sector]
         
@@ -745,7 +772,7 @@ class MyAssignment:
         if time.time() - self.pause_start_time < self.pause_duration:
             return True
         # Pause over — transition
-        print("Mode: Take Second Photo - Finished pause, taking second photo now")
+        # print("Mode: Take Second Photo - Finished pause, taking second photo now")
         self.mode = self.post_pause_mode
         self.ready_to_take_second_photo = True
         self.pause_start_time = None
@@ -836,11 +863,51 @@ class MyAssignment:
         n_segs = len(key_points) - 1
 
         # Initial segment times: distance / desired speed
+        n_segs = len(key_points) - 1
+
+        # Initial segment times based on 3D geometry + Kinematic Limits
         seg_times = []
         for i in range(n_segs):
-            dist = np.linalg.norm(np.array(key_points[i+1]) - np.array(key_points[i]))
-            # REDUCE THIS floor to 0.05 so tight alignment waypoints don't act as brakes
-            seg_times.append(max(dist / TRAJ_SPEED, 0.05))
+            p_curr = np.array(key_points[i])
+            p_next = np.array(key_points[i+1])
+            vec_fwd = p_next - p_curr
+            
+            dx = vec_fwd[0]
+            dy = vec_fwd[1]
+            dz = vec_fwd[2]
+            
+            # 1. Kinematically Decoupled Base Time
+            dist_xy = np.sqrt(dx**2 + dy**2)
+            t_xy = dist_xy / TRAJ_SPEED
+            
+            # --- TWEAK 1: Asymmetric Vertical Speeds ---
+            # Climbing requires thrust, dropping requires braking. 
+            # We force the planner to allocate MORE time to drops, which slows 
+            # the drone's horizontal speed and prevents it from gliding over the gate.
+            if dz > 0:
+                t_z = dz / 0.5   # Max climb speed
+            else:
+                t_z = abs(dz) / 0.3  # Max drop speed (Slower = steeper, safer descent!)
+                
+            t_seg = max(t_xy, t_z)
+            
+            # 2. Add cornering time at the START of the segment
+            if i > 0:
+                p_prev = np.array(key_points[i-1])
+                vec_in = p_curr - p_prev
+                t_seg += get_turn_penalty(vec_in, vec_fwd) * 0.5 
+                
+            # 3. Add cornering time at the END of the segment
+            if i < n_segs - 1:
+                p_next_next = np.array(key_points[i+2])
+                vec_out = p_next_next - p_next
+                t_seg += get_turn_penalty(vec_fwd, vec_out) * 0.5 
+                
+            # --- TWEAK 2: Anti-Ringing Time Floor ---
+            # Raise the minimum time from 0.25s to 0.4s. Giving the alignment 
+            # segment slightly more time acts as a buffer, preventing the polynomial 
+            # from bulging/looping after a massive drop.
+            seg_times.append(max(t_seg, 0.4))
 
         # Iteratively reduce times while checking dynamic limits
         for _ in range(20):  # max 20 reduction iterations
@@ -876,13 +943,14 @@ class MyAssignment:
                     break
 
             if feasible:
-                print(f"Trajectory feasible with times: {[f'{t:.2f}' for t in seg_times]}")
+                # print(f"Trajectory feasible with times: {[f'{t:.2f}' for t in seg_times]}")
                 break
             else:
                 # Scale all times up by 10% to slow down
                 seg_times = [t * 1.1 for t in seg_times]
         else:
-            print("Warning: trajectory did not fully converge to limits — using best found")
+            # print("Warning: trajectory did not fully converge to limits — using best found")
+            pass
 
         # Store coefficients and times for real-time evaluation
         self.traj_coeffs_x = cx
@@ -905,8 +973,8 @@ class MyAssignment:
         waypoints.append(np.array(key_points[-1]))
         self.trajectory_waypoints = waypoints
 
-        print(f"Polynomial trajectory: {n_segs} segments, "
-            f"total time {sum(seg_times):.1f}s, {len(waypoints)} sample points")
+        # print(f"Polynomial trajectory: {n_segs} segments, "
+        #     f"total time {sum(seg_times):.1f}s, {len(waypoints)} sample points")
 
         # =================== PLOT CODE (commented out) ===================
         # # --- Plot ---
@@ -945,7 +1013,7 @@ class MyAssignment:
 
         # plt.tight_layout()
         # plt.savefig('trajectory.png')
-        # # plt.show()
+        # plt.show()
         # =================== END OF PLOT CODE (commented out) ===================
 
     
@@ -1118,3 +1186,24 @@ def eval_poly_acc_1d(coeffs_seg, t_local):
     t = t_local
     return 2*coeffs_seg[2] + 6*coeffs_seg[3]*t + 12*coeffs_seg[4]*t**2 + \
            20*coeffs_seg[5]*t**3
+
+def get_turn_penalty(vec_in, vec_out):
+    """
+    Calculates the 3D angle between two vectors and returns a time penalty in seconds.
+    """
+    norm_in = np.linalg.norm(vec_in)
+    norm_out = np.linalg.norm(vec_out)
+    
+    # Avoid division by zero if waypoints are identical
+    if norm_in < 1e-4 or norm_out < 1e-4:
+        return 0.0
+        
+    # 3D Dot Product to find the angle
+    cos_theta = np.clip(np.dot(vec_in, vec_out) / (norm_in * norm_out), -1.0, 1.0)
+    theta = np.arccos(cos_theta) # Returns 0 (straight) to pi (180-degree u-turn)
+    
+    # MAXIMUM PENALTY: How much total time to add for a full 180-degree hairpin turn.
+    # A 90-degree corner will automatically apply half of this penalty.
+    MAX_TURN_PENALTY = 1.0 
+    
+    return (theta / np.pi) * MAX_TURN_PENALTY
