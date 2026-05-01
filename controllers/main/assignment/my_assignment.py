@@ -136,8 +136,8 @@ LOOKAHEAD_MIN = 0.4
 LOOKAHEAD_MAX = 1.8 
 
 # Curvature Check Parameters
-CURVATURE_TIME_AHEAD_1 = 0.3    # Seconds ahead to sample the first trajectory vector
-CURVATURE_TIME_AHEAD_2 = 0.8    # Seconds ahead to sample the second trajectory vector
+CURVATURE_TIME_AHEAD_1 = 0.2    # Seconds ahead to sample the first trajectory vector
+CURVATURE_TIME_AHEAD_2 = 0.6    # Seconds ahead to sample the second trajectory vector
 MIN_VECTOR_NORM = 0.01          # Minimum distance (m) required to safely calculate angles
 MAX_TURN_ANGLE_RAD = np.pi / 2.0 # 90 degrees in radians; the angle at which a turn is considered 100% severe
 
