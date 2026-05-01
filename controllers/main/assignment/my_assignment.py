@@ -39,9 +39,8 @@ class Mode(Enum):
     TAKE_SECOND_PHOTO = 7
     FLY_THROUGH_GATE = 8
     GO_HOME = 9
-    READY_TO_EXECUTE_TRAJECTORY = 10
-    EXECUTE_TRAJECTORY = 11
-    LAND = 12
+    EXECUTE_TRAJECTORY = 10
+    LAND = 11
 
 # Pink gates
 gates_r_value = 211
@@ -127,9 +126,11 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
 WAYPOINT_SPACING = 0.1      # metres between waypoints along the path
 WAYPOINT_ADVANCE_DIST = 0.4 # metres ahead of drone the active waypoint sits
 
-WAYPOINT_REACHED_EPS = 0.5 # metres - how close we need to be to a waypoint to consider it reached
-FLY_THROUGH_WAYPOINT_REACHED_EPS = 0.7
-FLY_THROUGH_WAYPOINT_DIST = 0.8
+WAYPOINT_REACHED_EPS = 0.2 # metres - how close we need to be to a waypoint to consider it reached
+FLY_THROUGH_WAYPOINT_REACHED_EPS = 0.4
+FLY_THROUGH_WAYPOINT_DIST = 0.5
+REACHED_EPS = 0.2 
+
 
 class MyAssignment:
     def __init__(self, ):
@@ -167,9 +168,8 @@ class MyAssignment:
         # Default control command - TODO: remove this later 
         control_command = [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
 
-        if (self.current_gate_number >= 5 and self.mode != Mode.READY_TO_EXECUTE_TRAJECTORY): # Since we're zero indexed, after flying through gate 4 we are done
+        if (self.current_gate_number >= 5 and self.mode != Mode.EXECUTE_TRAJECTORY): # Since we're zero indexed, after flying through gate 4 we are done
             self.mode = Mode.GO_HOME
-            self.current_gate_number = 0 # Reset gate number for potential future laps
 
         # Take off command
         if (self.mode == Mode.TAKE_OFF):
@@ -193,8 +193,6 @@ class MyAssignment:
             control_command = self.get_capture_second_photo_command(camera_data, sensor_data)
         elif (self.mode == Mode.GO_HOME):
             control_command = self.get_go_home_command(sensor_data)
-        elif (self.mode == Mode.READY_TO_EXECUTE_TRAJECTORY):
-            return self.get_ready_to_execute_trajectory_command(sensor_data)
         elif self.mode == Mode.EXECUTE_TRAJECTORY:
             control_command = self.get_execute_trajectory_command(sensor_data)
         elif (self.mode == Mode.LAND):
@@ -253,7 +251,6 @@ class MyAssignment:
         if self.is_target_gate_not_fully_in_FOV(camera_data, target_gate):
             # print("Search Gate: Target gate not fully in view, adjusting position")
             return self.adjust_position_for_better_FOV(camera_data, sensor_data, target_gate)
-
         self.target_gate_detection_img = camera_data.copy()
         self.target_gate_detection_img = cv2.polylines(
             self.target_gate_detection_img, [target_gate], isClosed=True, color=(0, 0, 255), thickness=2)
@@ -289,9 +286,9 @@ class MyAssignment:
             # print("Mode: Take Second Photo - Pausing to take second photo at measurement position")
             self.start_pause(PAUSE_AT_MEASUREMENT_POS, Mode.TAKE_SECOND_PHOTO) 
         elif dist_to_target < pos_eps and not facing_gate:
-            pass
             # print(f"Approach: at position but yaw not settled yet (error={np.degrees(yaw_error):.1f}°), waiting")
-            
+            pass
+
         # Either way, fly to the 0.8m mark
         return [self.measurement_target_pos[0], self.measurement_target_pos[1], self.measurement_target_pos[2], self.measurement_target_yaw]
 
@@ -367,9 +364,9 @@ class MyAssignment:
         if (abs(sensor_data['x_global'] - HOME_POSITION[0]) < pos_eps and
             abs(sensor_data['y_global'] - HOME_POSITION[1]) < pos_eps and
             abs(sensor_data['z_global'] - HOME_POSITION[2]) < pos_eps):
-            self.mode = Mode.READY_TO_EXECUTE_TRAJECTORY
+            self.mode = Mode.EXECUTE_TRAJECTORY
             self.current_traj_gate_number = 0
-            # print("Mode: Ready to Execute Trajectory (inside get_go_home_command)")
+            # print("Mode: Execute Trajectory (inside get_go_home_command)")
             self.trajectory_waypoints = self.compute_trajectory() # TODO - could also change this to now return the compute trajectory command
         return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
     
@@ -383,54 +380,84 @@ class MyAssignment:
                 # print(f"Gate {gate_idx}: NOT DETECTED")
                 pass
         return [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
-
-    def get_ready_to_execute_trajectory_command(self, sensor_data):
-        # Get to the height of the first gate center before leaving the pad to save time:
-        target_z = self.gate_center_poses[0][0][2] # Get the z value of the first gate center
-        target_yaw = self.gate_center_poses[0][1] # Get the yaw of the first gate center
-        if (abs(sensor_data['x_global'] - HOME_POSITION[0]) < pos_eps and
-            abs(sensor_data['y_global'] - HOME_POSITION[1]) < pos_eps and
-            abs(sensor_data['z_global'] - target_z) < pos_eps and
-            abs((sensor_data['yaw'] - target_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
-            self.mode = Mode.EXECUTE_TRAJECTORY
-            # print("Mode: Execute Trajectory")
-        return [sensor_data['x_global'], sensor_data['y_global'], target_z, target_yaw]
-
+    
     def get_execute_trajectory_command(self, sensor_data):
         """
-        Moving-waypoint trajectory follower.
-        The active waypoint sits WAYPOINT_ADVANCE_DIST ahead of the drone along
-        the trajectory. Each call finds the closest waypoint to the drone, then
-        advances the target by WAYPOINT_ADVANCE_DIST worth of waypoints.
+        Bulletproof Point-to-Point Waypoint Follower.
+        Uses a rigid state machine to guarantee the drone passes through a safe
+        approach point, the exact center, and a safe exit point for every gate.
         """
-        center, yaw = self.gate_center_poses_dict[self.current_traj_gate_number]
-        approach_gate_x, approach_gate_y, approach_gate_z = self.compute_approach_position(center, sensor_data['yaw'])
-        fly_through_target_x, fly_through_target_y, fly_through_target_z = self.compute_fly_through_waypoint_position(center, sensor_data['yaw']) # We want to fly straight through in the direction we are currently facing, not necessarily the gate yaw
+        # Initialize the sub-state machine if it doesn't exist
+        if not hasattr(self, 'traj_sub_state'):
+            self.traj_sub_state = 'PRE_GATE'
 
-        if (abs(sensor_data['x_global'] - fly_through_target_x) < FLY_THROUGH_WAYPOINT_REACHED_EPS and
-            abs(sensor_data['y_global'] - fly_through_target_y) < FLY_THROUGH_WAYPOINT_REACHED_EPS and
-            abs(sensor_data['z_global'] - fly_through_target_z) < FLY_THROUGH_WAYPOINT_REACHED_EPS):
-            # We are at the current gate center, time to move to the next one
-            if (self.current_traj_gate_number >= 4): # Since we're zero indexed, after flying through gate 4 we are done
-                self.mode = Mode.GO_HOME
-                # print("Mode: Go Home")
-                return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
-            else:
+        # Check if we have completed all gates
+        if self.current_traj_gate_number >= len(self.gate_center_poses_dict):
+            self.mode = Mode.GO_HOME
+            return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
+
+        # Get the target gate's data
+        center, yaw = self.gate_center_poses_dict[self.current_traj_gate_number]
+        
+        # Define the safety runway distance (0.6m provides plenty of room to level out)
+        ALIGN_DIST = 0.6 
+        
+        # Calculate the 3 strict waypoints
+        pre_gate = np.array([
+            center[0] - np.cos(yaw) * ALIGN_DIST,
+            center[1] - np.sin(yaw) * ALIGN_DIST,
+            center[2]
+        ])
+        
+        post_gate = np.array([
+            center[0] + np.cos(yaw) * ALIGN_DIST,
+            center[1] + np.sin(yaw) * ALIGN_DIST,
+            center[2]
+        ])
+
+        drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
+        
+        # Tolerance: How close the drone must physically get to the point before moving on.
+        # 0.2 meters is tight enough to ensure safety but loose enough to prevent getting stuck.
+
+        # --- State Machine Logic ---
+        if self.traj_sub_state == 'PRE_GATE':
+            target = pre_gate
+            
+            # Check if position AND yaw are aligned before committing to the gate
+            yaw_error = abs((sensor_data['yaw'] - yaw + np.pi) % (2 * np.pi) - np.pi)
+            
+            # Must be within 20cm of the pre-gate and facing the correct direction
+            if np.linalg.norm(drone_pos - target) < REACHED_EPS and yaw_error < 0.2:
+                self.traj_sub_state = 'CENTER'
+                
+        elif self.traj_sub_state == 'CENTER':
+            target = center
+            if np.linalg.norm(drone_pos - target) < REACHED_EPS:
+                self.traj_sub_state = 'POST_GATE'
+                
+        elif self.traj_sub_state == 'POST_GATE':
+            target = post_gate
+            if np.linalg.norm(drone_pos - target) < REACHED_EPS:
+                # We have cleanly exited the gate! Move to the next one.
                 self.current_traj_gate_number += 1
-        
-        if (abs(sensor_data['x_global'] - center[0]) < WAYPOINT_REACHED_EPS and
-            abs(sensor_data['y_global'] - center[1]) < WAYPOINT_REACHED_EPS and
-            abs(sensor_data['z_global'] - center[2]) < WAYPOINT_REACHED_EPS):
-            # We are near the current waypoint, move waypoint through to improve speed, time to move to the next one
-            return [fly_through_target_x, fly_through_target_y, fly_through_target_z, yaw]
-        
-        if (abs(sensor_data['x_global'] - approach_gate_x) < FLY_THROUGH_WAYPOINT_REACHED_EPS and
-            abs(sensor_data['y_global'] - approach_gate_y) < FLY_THROUGH_WAYPOINT_REACHED_EPS and
-            abs(sensor_data['z_global'] - approach_gate_z) < FLY_THROUGH_WAYPOINT_REACHED_EPS):
-            # We are near the current waypoint, move waypoint through to improve speed, time to move to the next one
-            return [center[0], center[1], center[2], yaw]
-        
-        return [approach_gate_x, approach_gate_y, approach_gate_z, yaw]
+                self.traj_sub_state = 'PRE_GATE'
+                
+                # Check if that was the last gate
+                if self.current_traj_gate_number >= len(self.gate_center_poses_dict):
+                    self.mode = Mode.GO_HOME
+                    return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
+                
+                # Instantly update target to the next gate's pre-gate to avoid pausing
+                next_center, next_yaw = self.gate_center_poses_dict[self.current_traj_gate_number]
+                target = np.array([
+                    next_center[0] - np.cos(next_yaw) * ALIGN_DIST,
+                    next_center[1] - np.sin(next_yaw) * ALIGN_DIST,
+                    next_center[2]
+                ])
+                yaw = next_yaw
+
+        return [target[0], target[1], target[2], yaw]
 
 
     # ------------------------------------------------------------------
@@ -509,17 +536,44 @@ class MyAssignment:
         if gates is None:
             return None
 
-        # Filter to only gates with exactly 4 corners
-        valid_gates = [g for g in gates if len(g) == 4]
+        valid_gates = []
+        for gate in gates:
+            # Flatten the OpenCV contour array to a standard Nx2 array
+            pts = gate.reshape(-1, 2)
+            
+            # 1. If it's already a perfect 4-corner shape, keep it!
+            if len(pts) == 4:
+                valid_gates.append(pts)
+                
+            # 2. THE FIX: If noise or frame-clipping creates 5 to 10 corners, 
+            # extract the 4 most extreme bounding corners.
+            elif 4 < len(pts) <= 10:  
+                # Top-Left has the smallest (x + y), Bottom-Right has the largest
+                s = pts.sum(axis=1)
+                tl = pts[np.argmin(s)]
+                br = pts[np.argmax(s)]
+                
+                # np.diff calculates (y - x). 
+                # Top-Right has the smallest difference, Bottom-Left has the largest
+                diff = np.diff(pts, axis=1)
+                tr = pts[np.argmin(diff)]
+                bl = pts[np.argmax(diff)]
+                
+                # Reconstruct the perfect 4-corner array
+                four_corner_gate = np.array([tl, tr, br, bl], dtype=np.int32)
+                valid_gates.append(four_corner_gate)
 
         if not valid_gates:
             return None
 
+        # Draw the successfully extracted 4-corner gates in green
         for points in valid_gates:
             self.gate_detection_img = camera_data.copy()
-            self.gate_detection_img = cv2.polylines(self.gate_detection_img, [points], isClosed=True, color=(0, 255, 0), thickness=2)
+            self.gate_detection_img = cv2.polylines(
+                self.gate_detection_img, [points], isClosed=True, color=(0, 255, 0), thickness=2
+            )
 
-        return valid_gates # list of polygons, or None
+        return valid_gates
     
     def get_target_gate(self, camera_data, sensor_data):
         """Returns (gate_polygon, gate_corners) or (None, None)."""
@@ -693,12 +747,12 @@ class MyAssignment:
                          gate_center[1] + offset_y,
                          gate_center[2]])
     
-    def compute_fly_through_waypoint_position(self, gate_center, fly_through_gate_yaw):
+    def compute_fly_through_waypoint_position(self, gate_center, gate_yaw):
         """
         Returns the 3-D point FLY_THROUGH_WAYPOINT_DIST metres beyond the gate center in the direction of the gate's facing.
         """
-        offset_x = np.cos(fly_through_gate_yaw) * FLY_THROUGH_WAYPOINT_DIST
-        offset_y = np.sin(fly_through_gate_yaw) * FLY_THROUGH_WAYPOINT_DIST
+        offset_x = np.cos(gate_yaw) * FLY_THROUGH_WAYPOINT_DIST
+        offset_y = np.sin(gate_yaw) * FLY_THROUGH_WAYPOINT_DIST
         return np.array([gate_center[0] + offset_x,
                          gate_center[1] + offset_y,
                          gate_center[2]])
@@ -846,7 +900,7 @@ class MyAssignment:
 
         return gates  # list of Nx2 arrays, one per gate
 
-    def rgb_to_hsv_bounds(self, r, g, b, hue_tolerance=15, sat_min=40, val_min=80):
+    def rgb_to_hsv_bounds(self, r, g, b, hue_tolerance=20, sat_min=40, val_min=80):
         """Helper to convert an RGB eyedropper reading into HSV bounds for inRange."""
         pixel = np.uint8([[[b, g, r]]])  # OpenCV is BGR
         hsv = cv2.cvtColor(pixel, cv2.COLOR_BGR2HSV)[0][0]
@@ -864,10 +918,17 @@ def get_command(sensor_data, camera_data, dt):
 
 def show_detection():
     pass
+    # # Show the raw blue polygons (EVERYTHING pink)
+    # if hasattr(_controller, 'debug_pink_img') and _controller.debug_pink_img is not None:
+    #     cv2.imshow("DEBUG: All Pink Areas (Raw)", _controller.debug_pink_img)
+        
+    # # Show the green 4-corner polygons (VALID gates)
     # if _controller.gate_detection_img is not None:
-    #     cv2.imshow("All Gate Detection", _controller.gate_detection_img)
-    #     cv2.waitKey(1)
+    #     cv2.imshow("All Gate Detection (Filtered)", _controller.gate_detection_img)
+        
+    # # Show the red targeted gate
     # if _controller.target_gate_detection_img is not None:
     #     cv2.imshow("Target Gate Detection", _controller.target_gate_detection_img)
-    #     cv2.waitKey(1)
+        
+    # cv2.waitKey(1)
 
