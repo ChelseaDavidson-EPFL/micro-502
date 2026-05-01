@@ -201,7 +201,6 @@ class MyAssignment:
         return control_command # Ordered as array with: [pos_x_cmd, pos_y_cmd, pos_z_cmd, yaw_cmd] in meters and radians
 
     def get_go_to_search_area_command(self, sensor_data):
-        # This function is not currently used since we go straight to searching, but it could be used if we wanted a separate state for flying to the search area before starting to search
         target_pos = GATE_SEARCH_POSITIONS[self.current_gate_number]['pos']
         target_yaw = GATE_SEARCH_POSITIONS[self.current_gate_number]['yaw']
 
@@ -276,7 +275,7 @@ class MyAssignment:
         # Check how far we are from our 0.8m measurement spot
         dist_to_target = np.linalg.norm(self.measurement_target_pos - drone_pos)
 
-        # Check yaw error (wrapped to [-π, π])
+        # Check yaw error (wrapped to [-pi, pi])
         yaw_error = abs((sensor_data['yaw'] - self.measurement_target_yaw + np.pi) % (2 * np.pi) - np.pi)
         facing_gate = yaw_error < eps
         
@@ -383,7 +382,7 @@ class MyAssignment:
     
     def get_execute_trajectory_command(self, sensor_data):
         """
-        Bulletproof Point-to-Point Waypoint Follower.
+        Point-to-Point Waypoint Follower.
         Uses a rigid state machine to guarantee the drone passes through a safe
         approach point, the exact center, and a safe exit point for every gate.
         """
@@ -399,7 +398,7 @@ class MyAssignment:
         # Get the target gate's data
         center, yaw = self.gate_center_poses_dict[self.current_traj_gate_number]
         
-        # Define the safety runway distance (0.6m provides plenty of room to level out)
+        # Define the safety runway distance
         ALIGN_DIST = 0.6 
         
         # Calculate the 3 strict waypoints
@@ -439,7 +438,7 @@ class MyAssignment:
         elif self.traj_sub_state == 'POST_GATE':
             target = post_gate
             if np.linalg.norm(drone_pos - target) < REACHED_EPS:
-                # We have cleanly exited the gate! Move to the next one.
+                # We have cleanly exited the gate. Move to the next one.
                 self.current_traj_gate_number += 1
                 self.traj_sub_state = 'PRE_GATE'
                 
@@ -541,11 +540,11 @@ class MyAssignment:
             # Flatten the OpenCV contour array to a standard Nx2 array
             pts = gate.reshape(-1, 2)
             
-            # 1. If it's already a perfect 4-corner shape, keep it!
+            # 1. If it's already a perfect 4-corner shape, keep it
             if len(pts) == 4:
                 valid_gates.append(pts)
                 
-            # 2. THE FIX: If noise or frame-clipping creates 5 to 10 corners, 
+            # 2. If noise or frame-clipping creates 5 to 10 corners, 
             # extract the 4 most extreme bounding corners.
             elif 4 < len(pts) <= 10:  
                 # Top-Left has the smallest (x + y), Bottom-Right has the largest
@@ -643,7 +642,7 @@ class MyAssignment:
         tl, bl = left_side[0], left_side[1]
         tr, br = right_side[0], right_side[1]
 
-        # 4. Calculate horizontal distance for left and right edges INDEPENDENTLY
+        # 4. Calculate horizontal distance for left and right edges independently
         slope_diff_left = tl['slope'] - bl['slope']
         slope_diff_right = tr['slope'] - br['slope']
 
@@ -656,7 +655,7 @@ class MyAssignment:
         # 5. Project each corner into 3D using its respective side's distance
         corner_positions = []
         
-        # We maintain a strict output order: TL, TR, BR, BL
+        # Output order: TL, TR, BR, BL
         for corner, D_xy in [(tl, D_xy_left), (tr, D_xy_right), (br, D_xy_right), (bl, D_xy_left)]:
             v_world = corner['v_world']
             norm_xy = corner['norm_xy']
@@ -689,7 +688,7 @@ class MyAssignment:
         dx = pos[0] - cx   # x: up
         dy = pos[1] - cy   # y: left
 
-        # 0° = downward (-x), but now CLOCKWISE positive
+        # 0° = downward (-x), but now clockwise is positive
         angle = np.atan2(-dy, -dx)
 
         deg = np.degrees(angle)

@@ -1,0 +1,148 @@
+
+----------------------------------
+Time of run: Fri May  1 03:59:33 2026
+Seed: 9387956
+Lap times: [48.128, 19.864000000000004, 19.727999999999994]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:00:02 2026
+Seed: 2592563
+Lap times: [48.208, 19.712000000000003, 20.0]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:00:34 2026
+Seed: 5088580
+Lap times: [49.480000000000004, 19.856, 19.439999999999998]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:01:10 2026
+Seed: 7293265
+Lap times: [45.912, 21.048000000000002, 20.775999999999996]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:01:41 2026
+Seed: 6287885
+Lap times: [47.48, 20.56799999999999, 19.495999999999995]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:02:13 2026
+Seed: 6996502
+Lap times: [49.864, 20.632000000000005, 20.296000000000006]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:02:41 2026
+Seed: 6080094
+Lap times: [46.56, 20.128000000000007, 19.92]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:03:08 2026
+Seed: 3901166
+Lap times: [57.72, 17.248000000000005, 17.415999999999997]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:03:35 2026
+Seed: 2361805
+Lap times: [51.088, 20.368000000000002, 19.304000000000002]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:04:02 2026
+Seed: 6652458
+Lap times: [44.824, 23.007999999999996, 21.439999999999998]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:04:28 2026
+Seed: 1198079
+Lap times: [53.344, 18.519999999999996, 19.007999999999996]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:04:56 2026
+Seed: 7125130
+Lap times: [56.967999999999996, 18.255999999999993, 18.512]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:05:23 2026
+Seed: 1951387
+Lap times: [50.888000000000005, 19.511999999999993, 19.439999999999998]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:05:49 2026
+Seed: 7913277
+Lap times: [45.664, 21.767999999999994, 21.295999999999992]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:06:17 2026
+Seed: 2319324
+Lap times: [46.160000000000004, 20.368000000000002, 20.75200000000001]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:06:48 2026
+Seed: 9867287
+Lap times: [52.480000000000004, 18.735999999999997, 18.71199999999999]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:07:15 2026
+Seed: 3723194
+Lap times: [51.248000000000005, 20.087999999999994, 19.54400000000001]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:07:55 2026
+Seed: 5523406
+Lap times: [49.968, 18.424, 18.64800000000001]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:08:30 2026
+Seed: 37170
+Lap times: [52.519999999999996, 20.36800000000001, 19.855999999999995]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:09:09 2026
+Seed: 1623475
+Lap times: [51.168, 18.424, 18.831999999999994]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:09:40 2026
+Seed: 9201662
+Lap times: [49.32, 18.90400000000001, 19.135999999999996]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:10:12 2026
+Seed: 2062518
+Lap times: [46.576, 19.11200000000001, 19.096000000000004]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:10:45 2026
+Seed: 258403
+Lap times: [43.712, 19.703999999999994, 20.088000000000008]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:11:26 2026
+Seed: 5955659
+Lap times: [42.36, 20.943999999999996, 20.911999999999992]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Fri May  1 04:12:02 2026
+Seed: 1844331
