@@ -70,7 +70,7 @@ def run_once(
 if __name__ == "__main__":
     # ── Configure your simulation here ──────────────────────────────────────
     WORLD_PATH   = Path("worlds/crazyflie_world_assignment.wbt")                          # Path to your .wbt file
-    RUNS         = 250                                                        # Number of simulation runs
+    RUNS         = 100                                                        # Number of simulation runs
     WEBOTS_EXEC  = "C:/Program Files/Webots/msys64/mingw64/bin/webotsw.exe"       # Full path to Webots executable
     TIMEOUT      = None                                                      # Seconds per run, or None for no limit
     NO_STDOUT    = False                                                     # True to suppress Webots stdout
