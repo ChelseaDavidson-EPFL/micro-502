@@ -126,7 +126,7 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
 # Trajectory constants
 TRAJ_SPEED = 5.0          
 MAX_VELOCITY = 7.0        
-MAX_ACCELERATION = 6.0    
+MAX_ACCELERATION = 7.0    
 TRAJ_DT = 0.02           
 
 # Tuning parameters for adaptive lookahead in trajectory execution
@@ -432,19 +432,19 @@ class MyAssignment:
             dir_vec = np.array([np.cos(gate_yaw), np.sin(gate_yaw), 0.0])
             vec_to_drone = drone_pos - gate_center
             
-            # --- THE FIX: Use Sensor Data to verify we are safely THROUGH the gate ---
+            # Use Sensor Data to verify we are safely THROUGH the gate ---
             # 1. Project position: How many meters PAST the gate plane are we?
             forward_dist = np.dot(vec_to_drone, dir_vec)
             
             # 2. Project velocity: Is the drone physically moving forward out the exit?
             drone_vel = np.array([sensor_data['v_x'], sensor_data['v_y'], sensor_data['v_z']])
-            is_moving_forward = np.dot(drone_vel, dir_vec) > 0
+            # is_moving_forward = np.dot(drone_vel, dir_vec) > 0
             
             # Trigger passage ONLY if we are at least 0.25 meters past the center plane,
             # moving in the right direction, and inside the hoop threshold.
-            if (forward_dist > 0.1 and 
-                is_moving_forward and
-                np.linalg.norm(vec_to_drone[:2]) < 1.5 and 
+            if (forward_dist > 0.02 and 
+                # is_moving_forward and
+                np.linalg.norm(vec_to_drone[:2]) < 1.7 and 
                 abs(vec_to_drone[2]) < 0.75):
                 
                 self.current_traj_gate_number += 1
@@ -501,7 +501,7 @@ class MyAssignment:
             gate_center, _ = self.gate_center_poses_dict[active_gate_key]
             dist_to_closest_gate = min(dist_to_closest_gate, np.linalg.norm(gate_center - drone_pos))
             
-        # 2. Check distance to the PREVIOUS gate (The Tail-Clip Fix!)
+        # 2. Check distance to the previous gate (Tail-Clip Fix)
         # if self.current_traj_gate_number > 0:
         #     prev_gate_key = gate_keys[self.current_traj_gate_number - 1]
         #     prev_gate_center, _ = self.gate_center_poses_dict[prev_gate_key]
@@ -531,7 +531,7 @@ class MyAssignment:
         # MUST use .copy() so we don't permanently deform the stored trajectory array!
         target_pos = self.trajectory_waypoints[target_idx].copy() 
 
-        # --- THE FIX: FOCUSED Z-AXIS SPLINE BELLY CLAMPING ---
+        # --- FOCUSED Z-AXIS SPLINE BELLY CLAMPING ---
         # ONLY check the gate we are currently targeting, and the gate we just left.
         # This prevents the drone from snapping to the altitude of old gates on intersecting tracks!
         gates_to_check = []
@@ -966,8 +966,6 @@ class MyAssignment:
             dist_xy = np.sqrt(dx**2 + dy**2)
             t_xy = dist_xy / TRAJ_SPEED
             
-            # --- THE SPEED FIX: Relax the Vertical Limits ---
-            # Drones can climb and fall much faster than 0.3 m/s!
             # --- HYPER-AGGRESSIVE VERTICAL LIMITS ---
             if dz > 0:
                 t_z = dz / 1.5   # Up from 1.0 m/s. Punch the throttle!
@@ -1284,10 +1282,6 @@ def get_turn_penalty(vec_in, vec_out):
         
     cos_theta = np.clip(np.dot(vec_in, vec_out) / (norm_in * norm_out), -1.0, 1.0)
     theta = np.arccos(cos_theta) 
-    
-    # --- THE SPEED FIX: Reduce the Cornering Penalty ---
-    # Down from 1.0s. Forces the drone to take corners faster 
-    # instead of heavily braking.
     MAX_TURN_PENALTY = MAX_TURN_PENALTY = 0.2
     
     return (theta / np.pi) * MAX_TURN_PENALTY
