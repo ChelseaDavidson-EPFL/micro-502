@@ -22,7 +22,7 @@ rand_env = True                # Randomise the environment
 # (Before we lock it, Python uses your computer's unpredictable system time)
 my_seed = random.randint(0, 9999999)
 # my_seed = 24242
-file_name = f"data_TEST9_Trajectory4_Fast.txt"
+file_name = f"data_TEST10_Trajectory5_Fast.txt"
 
 # --- REPLAY MODE ---
 # If your drone crashes and you need to replay the exact same environment,

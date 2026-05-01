@@ -132,7 +132,7 @@ TRAJ_DT = 0.02
 # Tuning parameters for adaptive lookahead in trajectory execution
 DIST_NEAR = 0.6   
 DIST_FAR = 2.0    
-LOOKAHEAD_MIN = 0.4 
+LOOKAHEAD_MIN = 0.6 
 LOOKAHEAD_MAX = 1.8 
 
 # Curvature Check Parameters
@@ -140,6 +140,10 @@ CURVATURE_TIME_AHEAD_1 = 0.2    # Seconds ahead to sample the first trajectory v
 CURVATURE_TIME_AHEAD_2 = 0.6    # Seconds ahead to sample the second trajectory vector
 MIN_VECTOR_NORM = 0.01          # Minimum distance (m) required to safely calculate angles
 MAX_TURN_ANGLE_RAD = np.pi / 2.0 # 90 degrees in radians; the angle at which a turn is considered 100% severe
+
+# Gate Inertia Compensation
+MODIFICATION_Z = 0.1       # Meters to artificially shift vertical targets
+MODIFICATION_LATERAL = 0.1 # Meters to artificially shift lateral (X/Y) targets
 
 class MyAssignment:
     def __init__(self, ):
@@ -915,22 +919,53 @@ class MyAssignment:
     
     def compute_trajectory(self):
         key_points = [HOME_POSITION.copy()]
+        
+        # Track the previous gate's original position for inertia calculations
+        prev_center = None 
+        
         for gate_idx in sorted(self.gate_center_poses_dict.keys()):
-            center, gate_yaw = self.gate_center_poses_dict[gate_idx]
+            # Get original center and yaw. Use .copy() so we don't permanently alter the map!
+            original_center, gate_yaw = self.gate_center_poses_dict[gate_idx]
+            center = original_center.copy() 
             
-            # Add a waypoint 0.5m before the gate to force approach at correct height
+            # --- START OF INERTIA MODIFICATION ---
+            if prev_center is not None:
+                # Z-Axis (Vertical) Modification
+                if center[2] < prev_center[2]:
+                    center[2] -= MODIFICATION_Z
+                elif center[2] > prev_center[2]:
+                    center[2] += MODIFICATION_Z
+                    
+                # X-Axis (Lateral) Modification
+                if center[0] < prev_center[0]:
+                    center[0] -= MODIFICATION_LATERAL
+                elif center[0] > prev_center[0]:
+                    center[0] += MODIFICATION_LATERAL
+                    
+                # Y-Axis (Lateral) Modification
+                if center[1] < prev_center[1]:
+                    center[1] -= MODIFICATION_LATERAL
+                elif center[1] > prev_center[1]:
+                    center[1] += MODIFICATION_LATERAL
+            
+            # Store the UNMODIFIED center for the next gate to compare against
+            prev_center = original_center.copy() 
+            # --- END OF INERTIA MODIFICATION ---
+
+            
+            # Add a waypoint before the gate to force approach at correct height
             ALIGN_DIST = 0.4
             pre_gate = center.copy()
             pre_gate[0] -= np.cos(gate_yaw) * ALIGN_DIST
             pre_gate[1] -= np.sin(gate_yaw) * ALIGN_DIST
             
-            # Add a waypoint 0.5m after the gate to force exit at correct height  
+            # Add a waypoint after the gate to force exit at correct height  
             post_gate = center.copy()
             post_gate[0] += np.cos(gate_yaw) * ALIGN_DIST
             post_gate[1] += np.sin(gate_yaw) * ALIGN_DIST
             
             key_points.append(pre_gate)
-            key_points.append(center.copy())   # gate center itself — polynomial must pass exactly here
+            key_points.append(center.copy())   # Shifted gate center itself
             key_points.append(post_gate)
         
         key_points.append(HOME_POSITION.copy())
@@ -1285,3 +1320,42 @@ def get_turn_penalty(vec_in, vec_out):
     MAX_TURN_PENALTY = MAX_TURN_PENALTY = 0.2
     
     return (theta / np.pi) * MAX_TURN_PENALTY
+
+def apply_inertia_offsets_to_gates(gates):
+    """
+    Artificially pushes gate targets outward based on the approach vector 
+    from the previous gate to compensate for drone inertia at high speeds.
+    """
+    if len(gates) == 0:
+        return []
+        
+    # Store the modified gates, keeping the first gate exactly as it is
+    modified_gates = [np.array(gates[0], dtype=float)]
+    
+    for i in range(1, len(gates)):
+        prev_gate = gates[i-1]
+        curr_gate = np.array(gates[i], dtype=float)
+        
+        # --- Z-Axis (Vertical) Modification ---
+        # If the current gate is shorter than the previous, push it even lower.
+        # If it's taller, push it even higher.
+        if curr_gate[2] < prev_gate[2]:
+            curr_gate[2] -= MODIFICATION_Z
+        elif curr_gate[2] > prev_gate[2]:
+            curr_gate[2] += MODIFICATION_Z
+            
+        # --- X-Axis (Lateral) Modification ---
+        if curr_gate[0] < prev_gate[0]:
+            curr_gate[0] -= MODIFICATION_LATERAL
+        elif curr_gate[0] > prev_gate[0]:
+            curr_gate[0] += MODIFICATION_LATERAL
+            
+        # --- Y-Axis (Lateral) Modification ---
+        if curr_gate[1] < prev_gate[1]:
+            curr_gate[1] -= MODIFICATION_LATERAL
+        elif curr_gate[1] > prev_gate[1]:
+            curr_gate[1] += MODIFICATION_LATERAL
+            
+        modified_gates.append(curr_gate)
+        
+    return modified_gates
