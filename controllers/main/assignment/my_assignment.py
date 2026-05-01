@@ -124,16 +124,16 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
     _entry['inward_dir'] = _to_center / np.linalg.norm(_to_center)  # unit vector toward arena center
 
 # Trajectory constants
-TRAJ_SPEED = 4.0          
+TRAJ_SPEED = 5.0          
 MAX_VELOCITY = 7.0        
-MAX_ACCELERATION = 5.0    
+MAX_ACCELERATION = 6.0    
 TRAJ_DT = 0.02           
 
 # Tuning parameters for adaptive lookahead in trajectory execution
 DIST_NEAR = 0.6   
 DIST_FAR = 2.0    
 LOOKAHEAD_MIN = 0.4 
-LOOKAHEAD_MAX = 1.4 
+LOOKAHEAD_MAX = 1.8 
 
 # Curvature Check Parameters
 CURVATURE_TIME_AHEAD_1 = 0.3    # Seconds ahead to sample the first trajectory vector
