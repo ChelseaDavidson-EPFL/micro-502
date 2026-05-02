@@ -20,9 +20,9 @@ rand_env = True                # Randomise the environment
 
 # 1. Let Python generate a random integer for the seed
 # (Before we lock it, Python uses your computer's unpredictable system time)
-my_seed = random.randint(0, 9999999)
-# my_seed = 1148236
-file_name = f"data_TEST11_Trajectory6_FasAugmentedGatest.txt"
+# my_seed = random.randint(0, 9999999)
+my_seed = 1148236
+file_name = f"data_TEST12_Trajectory7_Fast.txt"
 
 # --- REPLAY MODE ---
 # If your drone crashes and you need to replay the exact same environment,

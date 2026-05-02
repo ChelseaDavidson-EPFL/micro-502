@@ -130,7 +130,7 @@ MAX_ACCELERATION = 7.0
 TRAJ_DT = 0.02           
 
 # Tuning parameters for adaptive lookahead in trajectory execution
-DIST_NEAR = 0.4
+DIST_NEAR = 0.6   
 DIST_FAR = 2.0    
 LOOKAHEAD_MIN = 0.4 
 LOOKAHEAD_MAX = 1.8 
@@ -140,10 +140,6 @@ CURVATURE_TIME_AHEAD_1 = 0.2    # Seconds ahead to sample the first trajectory v
 CURVATURE_TIME_AHEAD_2 = 0.6    # Seconds ahead to sample the second trajectory vector
 MIN_VECTOR_NORM = 0.01          # Minimum distance (m) required to safely calculate angles
 MAX_TURN_ANGLE_RAD = np.pi / 2.0 # 90 degrees in radians; the angle at which a turn is considered 100% severe
-
-# Gate Inertia Compensation
-MODIFICATION_Z = 0.1       # Meters to artificially shift vertical targets
-MODIFICATION_LATERAL = 0.0 # Meters to artificially shift lateral (X/Y) targets
 
 class MyAssignment:
     def __init__(self, ):
@@ -399,7 +395,7 @@ class MyAssignment:
         return [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
 
     def get_ready_to_execute_trajectory_command(self, sensor_data):
-        # 1. Get the height and yaw of the first gate center 
+        # Get to the height of the first gate center before leaving the pad to save time:
         target_z = self.gate_center_poses[0][0][2] 
         # Target yaw = angle from home position toward first gate center (straight line)
         first_gate_center = self.gate_center_poses[0][0]
@@ -412,12 +408,13 @@ class MyAssignment:
             abs((sensor_data['yaw'] - target_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
             
             # 4. Drone has arrived. Trigger the pause instead of immediately changing mode.
-            print("Mode: Ready to Execute Trajectory - Arrived at height, pausing before execution")
+            # print("Mode: Ready to Execute Trajectory - Arrived at height, pausing before execution")
             self.traj_start_time = None  
             self.current_waypoint_index = 0 # ADD THIS: Reset index for spatial tracking
             
             # I am using 1.0 second here, but feel free to adjust this pause duration
             self.mode = Mode.EXECUTE_TRAJECTORY
+            # print("Mode: Execute Trajectory")
             self.start_pause(1.0, Mode.EXECUTE_TRAJECTORY) 
 
         return [sensor_data['x_global'], sensor_data['y_global'], target_z, target_yaw]
@@ -940,42 +937,42 @@ class MyAssignment:
     def compute_trajectory(self):
         key_points = [HOME_POSITION.copy()]
         
-        # Track the previous gate's original position for inertia calculations
-        prev_center = None 
-        
-        for gate_idx in sorted(self.gate_center_poses_dict.keys()):
-            # Get original center and yaw. Use .copy() so we don't permanently alter the map!
-            original_center, gate_yaw = self.gate_center_poses_dict[gate_idx]
-            center = original_center.copy() 
-            
-            # --- START OF INERTIA MODIFICATION ---
-            if prev_center is not None:
-                # Z-Axis (Vertical) Modification
-                if center[2] < prev_center[2]:
-                    center[2] -= MODIFICATION_Z
-                elif center[2] > prev_center[2]:
-                    center[2] += MODIFICATION_Z
-            
-            # Store the UNMODIFIED center for the next gate to compare against
-            prev_center = original_center.copy() 
-            # --- END OF INERTIA MODIFICATION ---
+        gate_keys = sorted(self.gate_center_poses_dict.keys())
+        for i, gate_idx in enumerate(gate_keys):
+            center, gate_yaw = self.gate_center_poses_dict[gate_idx]
 
-            
-            # Add a waypoint before the gate to force approach at correct height
+            # --- FIX 1: Use the direction from the PREVIOUS key point to the gate
+            # rather than gate_yaw for pre/post alignment.
+            # gate_yaw can point in the wrong direction relative to the drone's
+            # approach, causing the pre/post points to be placed BEHIND the drone,
+            # which creates a U-turn and the looping artifacts.
+            if i == 0:
+                prev_point = HOME_POSITION
+            else:
+                prev_center, _ = self.gate_center_poses_dict[gate_keys[i - 1]]
+                prev_point = prev_center
+
+            approach_vec = center[:2] - np.array(prev_point[:2])
+            approach_dist = np.linalg.norm(approach_vec)
+            if approach_dist > 1e-4:
+                approach_dir = approach_vec / approach_dist
+            else:
+                approach_dir = np.array([np.cos(gate_yaw), np.sin(gate_yaw)])
+
             ALIGN_DIST = 0.4
+
             pre_gate = center.copy()
-            pre_gate[0] -= np.cos(gate_yaw) * ALIGN_DIST
-            pre_gate[1] -= np.sin(gate_yaw) * ALIGN_DIST
-            
-            # Add a waypoint after the gate to force exit at correct height  
+            pre_gate[0] -= approach_dir[0] * ALIGN_DIST
+            pre_gate[1] -= approach_dir[1] * ALIGN_DIST
+
             post_gate = center.copy()
-            post_gate[0] += np.cos(gate_yaw) * ALIGN_DIST
-            post_gate[1] += np.sin(gate_yaw) * ALIGN_DIST
-            
+            post_gate[0] += approach_dir[0] * ALIGN_DIST
+            post_gate[1] += approach_dir[1] * ALIGN_DIST
+
             key_points.append(pre_gate)
-            key_points.append(center.copy())   # Shifted gate center itself
+            key_points.append(center.copy())
             key_points.append(post_gate)
-        
+
         key_points.append(HOME_POSITION.copy())
         self.plan_polynomial_trajectory(key_points)
         return self.trajectory_waypoints
@@ -1033,7 +1030,11 @@ class MyAssignment:
             # Raise the minimum time from 0.25s to 0.4s. Giving the alignment 
             # segment slightly more time acts as a buffer, preventing the polynomial 
             # from bulging/looping after a massive drop.
-            seg_times.append(max(t_seg, 0.4))
+            dist_3d = np.linalg.norm(np.array(key_points[i+1]) - np.array(key_points[i]))
+            # Short segments (pre/post gate, ~0.4m) need proportionally more time
+            # relative to their length to avoid ringing. Scale minimum floor by distance.
+            min_time = max(0.4, dist_3d / TRAJ_SPEED * 1.5)
+            seg_times.append(max(t_seg, min_time))
 
         # Iteratively reduce times while checking dynamic limits
         for _ in range(20):  # max 20 reduction iterations
@@ -1325,45 +1326,6 @@ def get_turn_penalty(vec_in, vec_out):
         
     cos_theta = np.clip(np.dot(vec_in, vec_out) / (norm_in * norm_out), -1.0, 1.0)
     theta = np.arccos(cos_theta) 
-    MAX_TURN_PENALTY = MAX_TURN_PENALTY = 0.1
+    MAX_TURN_PENALTY = MAX_TURN_PENALTY = 0.2
     
     return (theta / np.pi) * MAX_TURN_PENALTY
-
-def apply_inertia_offsets_to_gates(gates):
-    """
-    Artificially pushes gate targets outward based on the approach vector 
-    from the previous gate to compensate for drone inertia at high speeds.
-    """
-    if len(gates) == 0:
-        return []
-        
-    # Store the modified gates, keeping the first gate exactly as it is
-    modified_gates = [np.array(gates[0], dtype=float)]
-    
-    for i in range(1, len(gates)):
-        prev_gate = gates[i-1]
-        curr_gate = np.array(gates[i], dtype=float)
-        
-        # --- Z-Axis (Vertical) Modification ---
-        # If the current gate is shorter than the previous, push it even lower.
-        # If it's taller, push it even higher.
-        if curr_gate[2] < prev_gate[2]:
-            curr_gate[2] -= MODIFICATION_Z
-        elif curr_gate[2] > prev_gate[2]:
-            curr_gate[2] += MODIFICATION_Z
-            
-        # --- X-Axis (Lateral) Modification ---
-        if curr_gate[0] < prev_gate[0]:
-            curr_gate[0] -= MODIFICATION_LATERAL
-        elif curr_gate[0] > prev_gate[0]:
-            curr_gate[0] += MODIFICATION_LATERAL
-            
-        # --- Y-Axis (Lateral) Modification ---
-        if curr_gate[1] < prev_gate[1]:
-            curr_gate[1] -= MODIFICATION_LATERAL
-        elif curr_gate[1] > prev_gate[1]:
-            curr_gate[1] += MODIFICATION_LATERAL
-            
-        modified_gates.append(curr_gate)
-        
-    return modified_gates
