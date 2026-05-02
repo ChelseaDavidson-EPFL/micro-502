@@ -130,9 +130,9 @@ MAX_ACCELERATION = 7.0
 TRAJ_DT = 0.02           
 
 # Tuning parameters for adaptive lookahead in trajectory execution
-DIST_NEAR = 0.6   
+DIST_NEAR = 0.4
 DIST_FAR = 2.0    
-LOOKAHEAD_MIN = 0.6 
+LOOKAHEAD_MIN = 0.4 
 LOOKAHEAD_MAX = 1.8 
 
 # Curvature Check Parameters
@@ -143,7 +143,7 @@ MAX_TURN_ANGLE_RAD = np.pi / 2.0 # 90 degrees in radians; the angle at which a t
 
 # Gate Inertia Compensation
 MODIFICATION_Z = 0.1       # Meters to artificially shift vertical targets
-MODIFICATION_LATERAL = 0.1 # Meters to artificially shift lateral (X/Y) targets
+MODIFICATION_LATERAL = 0.0 # Meters to artificially shift lateral (X/Y) targets
 
 class MyAssignment:
     def __init__(self, ):
@@ -399,18 +399,27 @@ class MyAssignment:
         return [LAND_POSITION[0], LAND_POSITION[1], LAND_POSITION[2], 0.0]
 
     def get_ready_to_execute_trajectory_command(self, sensor_data):
-        # Get to the height of the first gate center before leaving the pad to save time:
+        # 1. Get the height and yaw of the first gate center 
         target_z = self.gate_center_poses[0][0][2] 
-        target_yaw = self.gate_center_poses[0][1] 
+        # Target yaw = angle from home position toward first gate center (straight line)
+        first_gate_center = self.gate_center_poses[0][0]
+        dx = first_gate_center[0] - HOME_POSITION[0]
+        dy = first_gate_center[1] - HOME_POSITION[1]
+        target_yaw = np.arctan2(dy, dx)
         if (abs(sensor_data['x_global'] - HOME_POSITION[0]) < pos_eps and
             abs(sensor_data['y_global'] - HOME_POSITION[1]) < pos_eps and
             abs(sensor_data['z_global'] - target_z) < pos_eps and
             abs((sensor_data['yaw'] - target_yaw + np.pi) % (2 * np.pi) - np.pi) < eps):
             
+            # 4. Drone has arrived. Trigger the pause instead of immediately changing mode.
+            print("Mode: Ready to Execute Trajectory - Arrived at height, pausing before execution")
             self.traj_start_time = None  
             self.current_waypoint_index = 0 # ADD THIS: Reset index for spatial tracking
+            
+            # I am using 1.0 second here, but feel free to adjust this pause duration
             self.mode = Mode.EXECUTE_TRAJECTORY
-            # print("Mode: Execute Trajectory")
+            self.start_pause(1.0, Mode.EXECUTE_TRAJECTORY) 
+
         return [sensor_data['x_global'], sensor_data['y_global'], target_z, target_yaw]
 
     def get_execute_trajectory_command(self, sensor_data):
@@ -418,6 +427,17 @@ class MyAssignment:
         Adaptive Pure Pursuit Tracker: Finds the closest geometric point on the 
         trajectory and looks ahead dynamically. Lookahead shrinks near the *active* target gate for precision and expands once passed for speed.
         """
+        pausing = self.is_pausing() # This will also handle the transition out of pausing when the time is up
+        if pausing:
+            # Still pausing, hold position
+            target_z = self.gate_center_poses[0][0][2] 
+            # Target yaw = angle from home position toward first gate center (straight line)
+            first_gate_center = self.gate_center_poses[0][0]
+            dx = first_gate_center[0] - HOME_POSITION[0]
+            dy = first_gate_center[1] - HOME_POSITION[1]
+            target_yaw = np.arctan2(dy, dx)
+            return [HOME_POSITION[0], HOME_POSITION[1], target_z, target_yaw]
+        
         if not hasattr(self, 'trajectory_waypoints') or not self.trajectory_waypoints:
             # print("No polynomial trajectory computed")
             return [sensor_data['x_global'], sensor_data['y_global'],
@@ -446,7 +466,7 @@ class MyAssignment:
             
             # Trigger passage ONLY if we are at least 0.25 meters past the center plane,
             # moving in the right direction, and inside the hoop threshold.
-            if (forward_dist > 0.02 and 
+            if (forward_dist > 0 and 
                 # is_moving_forward and
                 np.linalg.norm(vec_to_drone[:2]) < 1.7 and 
                 abs(vec_to_drone[2]) < 0.75):
@@ -935,18 +955,6 @@ class MyAssignment:
                     center[2] -= MODIFICATION_Z
                 elif center[2] > prev_center[2]:
                     center[2] += MODIFICATION_Z
-                    
-                # X-Axis (Lateral) Modification
-                if center[0] < prev_center[0]:
-                    center[0] -= MODIFICATION_LATERAL
-                elif center[0] > prev_center[0]:
-                    center[0] += MODIFICATION_LATERAL
-                    
-                # Y-Axis (Lateral) Modification
-                if center[1] < prev_center[1]:
-                    center[1] -= MODIFICATION_LATERAL
-                elif center[1] > prev_center[1]:
-                    center[1] += MODIFICATION_LATERAL
             
             # Store the UNMODIFIED center for the next gate to compare against
             prev_center = original_center.copy() 
@@ -1317,7 +1325,7 @@ def get_turn_penalty(vec_in, vec_out):
         
     cos_theta = np.clip(np.dot(vec_in, vec_out) / (norm_in * norm_out), -1.0, 1.0)
     theta = np.arccos(cos_theta) 
-    MAX_TURN_PENALTY = MAX_TURN_PENALTY = 0.2
+    MAX_TURN_PENALTY = MAX_TURN_PENALTY = 0.1
     
     return (theta / np.pi) * MAX_TURN_PENALTY
 
