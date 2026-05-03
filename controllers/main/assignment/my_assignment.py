@@ -125,14 +125,11 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
 
 # Trajectory constants
 WAYPOINT_SPACING = 0.1      # metres between waypoints along the path
-WAYPOINT_ADVANCE_DIST = 0.4 # metres ahead of drone the active waypoint sits
-
-WAYPOINT_REACHED_EPS = 0.2 # metres - how close we need to be to a waypoint to consider it reached
-FLY_THROUGH_WAYPOINT_REACHED_EPS = 0.4
-FLY_THROUGH_WAYPOINT_DIST = 0.3
-REACHED_EPS = 0.3 
-# Define the safety runway distance
 ALIGN_DIST = 0.4 
+PRE_WAYPOINT_REACHED_EPS = 0.4
+POST_WAYPOINT_REACHED_EPS = 0.4
+GATE_REACHED_EPS = 0.3
+WAYPOINT_YAW_REACHED_EPS = 0.3
 
 
 class MyAssignment:
@@ -463,17 +460,17 @@ class MyAssignment:
             yaw_error = abs((sensor_data['yaw'] - yaw + np.pi) % (2 * np.pi) - np.pi)
             
             # Must be within 20cm of the pre-gate and facing the correct direction
-            if np.linalg.norm(drone_pos - target) < REACHED_EPS and yaw_error < 0.3:
+            if np.linalg.norm(drone_pos - target) < PRE_WAYPOINT_REACHED_EPS and yaw_error < WAYPOINT_YAW_REACHED_EPS:
                 self.traj_sub_state = 'CENTER'
                 
         elif self.traj_sub_state == 'CENTER':
             target = center
-            if np.linalg.norm(drone_pos - target) < REACHED_EPS:
+            if np.linalg.norm(drone_pos - target) < GATE_REACHED_EPS:
                 self.traj_sub_state = 'POST_GATE'
                 
         elif self.traj_sub_state == 'POST_GATE':
             target = post_gate
-            if np.linalg.norm(drone_pos - target) < REACHED_EPS:
+            if np.linalg.norm(drone_pos - target) < POST_WAYPOINT_REACHED_EPS:
                 # We have cleanly exited the gate. Move to the next one.
                 self.current_traj_gate_number += 1
                 self.traj_sub_state = 'PRE_GATE'
@@ -778,16 +775,6 @@ class MyAssignment:
         """
         offset_x = np.cos(gate_yaw) * FLY_THROUGH_DIST
         offset_y = np.sin(gate_yaw) * FLY_THROUGH_DIST
-        return np.array([gate_center[0] + offset_x,
-                         gate_center[1] + offset_y,
-                         gate_center[2]])
-    
-    def compute_fly_through_waypoint_position(self, gate_center, gate_yaw):
-        """
-        Returns the 3-D point FLY_THROUGH_WAYPOINT_DIST metres beyond the gate center in the direction of the gate's facing.
-        """
-        offset_x = np.cos(gate_yaw) * FLY_THROUGH_WAYPOINT_DIST
-        offset_y = np.sin(gate_yaw) * FLY_THROUGH_WAYPOINT_DIST
         return np.array([gate_center[0] + offset_x,
                          gate_center[1] + offset_y,
                          gate_center[2]])
