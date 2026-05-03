@@ -48,3 +48,5 @@ Seed: 1148236
 ----------------------------------
 Time of run: Sun May  3 00:45:37 2026
 Seed: 1148236
+Lap times: [42.8, 15.200000000000003, 15.200000000000003]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]

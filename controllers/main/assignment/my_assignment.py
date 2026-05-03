@@ -3,6 +3,7 @@ import time
 import cv2
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from scipy.interpolate import CubicSpline
 
 # The available ground truth state measurements can be accessed by calling sensor_data[item]. All values of "item" are provided as defined in main.py within the function read_sensors.
 # The "item" values that you may later retrieve for the hardware project are:
@@ -129,17 +130,25 @@ MAX_VELOCITY = 7.0
 MAX_ACCELERATION = 7.0    
 TRAJ_DT = 0.02           
 
-# Tuning parameters for adaptive lookahead in trajectory execution
+# --- Adaptive Lookahead Parameters ---
 DIST_NEAR = 0.6   
 DIST_FAR = 2.0    
 LOOKAHEAD_MIN = 0.4 
 LOOKAHEAD_MAX = 1.8 
 
-# Curvature Check Parameters
-CURVATURE_TIME_AHEAD_1 = 0.2    # Seconds ahead to sample the first trajectory vector
-CURVATURE_TIME_AHEAD_2 = 0.6    # Seconds ahead to sample the second trajectory vector
+# --- Curvature Check Parameters ---
+CURVATURE_TIME_AHEAD_1 = 1.2    # Seconds ahead to sample the first trajectory vector
+CURVATURE_TIME_AHEAD_2 = 1.5    # Seconds ahead to sample the second trajectory vector
 MIN_VECTOR_NORM = 0.01          # Minimum distance (m) required to safely calculate angles
-MAX_TURN_ANGLE_RAD = np.pi / 2.0 # 90 degrees in radians; the angle at which a turn is considered 100% severe
+MAX_TURN_ANGLE_RAD = np.pi / 2.0 # 90 degrees in radians
+
+# --- Tracking & Gate Passage Parameters ---
+GATE_PASS_ENTRY_DIST = 0.2      # Distance (m) to enter the gate proximity bubble
+GATE_PASS_EXIT_DIST = 0.5       # Distance (m) to exit the bubble and trigger passage
+TRACKER_SEARCH_WINDOW_TIME = 3.0 # Seconds of trajectory to search for the closest point
+Z_CLAMP_DIST_XY = 0.8           # Lateral distance (m) to snap to the gate's exact Z height
+YAW_LOOKAHEAD_TIME = 0.8        # Seconds ahead on the trajectory to point the camera/yaw
+TRAJ_COMPLETE_DIST = 0.2        # Distance (m) from final waypoint to trigger GO_HOME
 
 class MyAssignment:
     def __init__(self, ):
@@ -422,113 +431,95 @@ class MyAssignment:
     def get_execute_trajectory_command(self, sensor_data):
         """
         Adaptive Pure Pursuit Tracker: Finds the closest geometric point on the 
-        trajectory and looks ahead dynamically. Lookahead shrinks near the *active* target gate for precision and expands once passed for speed.
+        trajectory and looks ahead dynamically.
         """
-        pausing = self.is_pausing() # This will also handle the transition out of pausing when the time is up
+        pausing = self.is_pausing() 
         if pausing:
-            # Still pausing, hold position
             target_z = self.gate_center_poses[0][0][2] 
-            # Target yaw = angle from home position toward first gate center (straight line)
             first_gate_center = self.gate_center_poses[0][0]
             dx = first_gate_center[0] - HOME_POSITION[0]
             dy = first_gate_center[1] - HOME_POSITION[1]
             target_yaw = np.arctan2(dy, dx)
             return [HOME_POSITION[0], HOME_POSITION[1], target_z, target_yaw]
         
-        if not hasattr(self, 'trajectory_waypoints') or not self.trajectory_waypoints:
-            # print("No polynomial trajectory computed")
-            return [sensor_data['x_global'], sensor_data['y_global'],
-                    sensor_data['z_global'], sensor_data['yaw']]
+        if not hasattr(self, 'trajectory_waypoints') or self.trajectory_waypoints is None or len(self.trajectory_waypoints) == 0:
+            return [sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global'], sensor_data['yaw']]
 
         drone_pos = np.array([sensor_data['x_global'], sensor_data['y_global'], sensor_data['z_global']])
 
-        # --- 1. Identify the Active Gate and Check for Passage ---
+        # --- 1. Identify the Active Gate and Check for Passage (CYLINDER PLANE-CROSSING) ---
         gate_keys = sorted(self.gate_center_poses_dict.keys())
         
         if self.current_traj_gate_number < len(gate_keys):
             active_gate_key = gate_keys[self.current_traj_gate_number]
-            gate_center, gate_yaw = self.gate_center_poses_dict[active_gate_key]
+            gate_center, _ = self.gate_center_poses_dict[active_gate_key]
             
-            # The direction the gate is facing
-            dir_vec = np.array([np.cos(gate_yaw), np.sin(gate_yaw), 0.0])
+            if self.current_traj_gate_number == 0:
+                prev_point = HOME_POSITION
+            else:
+                prev_gate_key = gate_keys[self.current_traj_gate_number - 1]
+                prev_point, _ = self.gate_center_poses_dict[prev_gate_key]
+                
+            approach_vec = gate_center[:2] - np.array(prev_point[:2])
+            
+            if np.linalg.norm(approach_vec) > MIN_VECTOR_NORM:
+                approach_dir = approach_vec / np.linalg.norm(approach_vec)
+            else:
+                approach_dir = np.array([1.0, 0.0]) 
+                
+            plane_normal = np.array([approach_dir[0], approach_dir[1], 0.0])
             vec_to_drone = drone_pos - gate_center
             
-            # Use Sensor Data to verify we are safely THROUGH the gate ---
-            # 1. Project position: How many meters PAST the gate plane are we?
-            forward_dist = np.dot(vec_to_drone, dir_vec)
+            forward_dist = np.dot(vec_to_drone, plane_normal)
+            dist_xy = np.linalg.norm(vec_to_drone[:2]) 
+            dist_z = abs(vec_to_drone[2])              
             
-            # 2. Project velocity: Is the drone physically moving forward out the exit?
-            drone_vel = np.array([sensor_data['v_x'], sensor_data['v_y'], sensor_data['v_z']])
-            # is_moving_forward = np.dot(drone_vel, dir_vec) > 0
-            
-            # Trigger passage ONLY if we are at least 0.25 meters past the center plane,
-            # moving in the right direction, and inside the hoop threshold.
-            if (forward_dist > 0 and 
-                # is_moving_forward and
-                np.linalg.norm(vec_to_drone[:2]) < 1.7 and 
-                abs(vec_to_drone[2]) < 0.75):
-                
+            if forward_dist > 0.0 and dist_xy < 3.0 and dist_z < 4.0:
                 self.current_traj_gate_number += 1
 
-        # --- (Old Section 3) Find the closest point on the trajectory ---
-        search_window = int(1.0 / TRAJ_DT) 
-        start_idx = getattr(self, 'current_waypoint_index', 0)
-        end_idx = min(start_idx + search_window, len(self.trajectory_waypoints))
+        # --- 3. Find the closest point on the trajectory (LOCALIZED VECTORIZED FIX) ---
+        # Restrict the search window to 1.5s ahead and 0.5s behind. This allows catching up
+        # but prevents "short-circuiting" onto overlapping future sections of the track.
+        search_window_fwd = int(1.5 / TRAJ_DT) 
+        search_window_bwd = int(0.5 / TRAJ_DT) 
         
-        best_dist = float('inf')
-        best_idx = start_idx
-        for i in range(start_idx, end_idx):
-            dist = np.linalg.norm(self.trajectory_waypoints[i] - drone_pos)
-            if dist < best_dist:
-                best_dist = dist
-                best_idx = i
+        current_idx = getattr(self, 'current_waypoint_index', 0)
+        start_idx = max(0, current_idx - search_window_bwd)
+        end_idx = min(current_idx + search_window_fwd, len(self.trajectory_waypoints))
+        
+        window_points = self.trajectory_waypoints[start_idx:end_idx]
+        distances = np.linalg.norm(window_points - drone_pos, axis=1)
+        
+        best_idx_in_window = np.argmin(distances)
+        best_idx = start_idx + best_idx_in_window
                 
         self.current_waypoint_index = best_idx
 
-        # --- (New Section 2) Calculate Dynamic Lookahead: CURVATURE + GATE PROXIMITY ---
-        
-        # Part A: Curvature Check (slows down for sharp turns)
-        
-        # Calculate indices based on the global time-ahead constants
+        # --- 2. Calculate Dynamic Lookahead: CURVATURE + GATE PROXIMITY ---
         idx_ahead_1 = min(best_idx + int(CURVATURE_TIME_AHEAD_1 / TRAJ_DT), len(self.trajectory_waypoints) - 1)
         idx_ahead_2 = min(best_idx + int(CURVATURE_TIME_AHEAD_2 / TRAJ_DT), len(self.trajectory_waypoints) - 1)
         
-        # Create vectors to map the upcoming path
         vec1 = self.trajectory_waypoints[idx_ahead_1] - self.trajectory_waypoints[best_idx]
         vec2 = self.trajectory_waypoints[idx_ahead_2] - self.trajectory_waypoints[idx_ahead_1]
         
         norm1 = np.linalg.norm(vec1)
         norm2 = np.linalg.norm(vec2)
         
-        # Only calculate the angle if both vectors have meaningful length
         if norm1 > MIN_VECTOR_NORM and norm2 > MIN_VECTOR_NORM:
             cos_theta = np.clip(np.dot(vec1, vec2) / (norm1 * norm2), -1.0, 1.0)
             theta = np.arccos(cos_theta)  
         else:
             theta = 0.0
             
-        # Scale the severity from 0.0 (straight line) to 1.0 (max turn angle)
         turn_severity = np.clip(theta / MAX_TURN_ANGLE_RAD, 0.0, 1.0)
-        
-        # Interpolate the lookahead distance based on the turn severity
         curve_lookahead = LOOKAHEAD_MAX - (turn_severity * (LOOKAHEAD_MAX - LOOKAHEAD_MIN))
 
-        # --- Part B: Gate Proximity Check (Symmetrical Precision Bubble) ---
         dist_to_closest_gate = float('inf')
-        
-        # 1. Check distance to the UPCOMING gate
         if self.current_traj_gate_number < len(gate_keys):
             active_gate_key = gate_keys[self.current_traj_gate_number]
             gate_center, _ = self.gate_center_poses_dict[active_gate_key]
             dist_to_closest_gate = min(dist_to_closest_gate, np.linalg.norm(gate_center - drone_pos))
             
-        # 2. Check distance to the previous gate (Tail-Clip Fix)
-        # if self.current_traj_gate_number > 0:
-        #     prev_gate_key = gate_keys[self.current_traj_gate_number - 1]
-        #     prev_gate_center, _ = self.gate_center_poses_dict[prev_gate_key]
-        #     dist_to_closest_gate = min(dist_to_closest_gate, np.linalg.norm(prev_gate_center - drone_pos))
-            
-        # 3. Shrink lookahead if we are near EITHER gate
         if dist_to_closest_gate <= DIST_NEAR:
             gate_lookahead = LOOKAHEAD_MIN
         elif dist_to_closest_gate >= DIST_FAR:
@@ -537,55 +528,50 @@ class MyAssignment:
             ratio = (dist_to_closest_gate - DIST_NEAR) / (DIST_FAR - DIST_NEAR)
             gate_lookahead = LOOKAHEAD_MIN + ratio * (LOOKAHEAD_MAX - LOOKAHEAD_MIN)
             
-        # Part C: The Ultimate Lookahead (Always play it safe!)
-        # If there's a sharp turn, OR a gate is close, take the smaller lookahead.
         dynamic_lookahead = min(curve_lookahead, gate_lookahead)
 
         # --- 4. Trace forward along the path by dynamic_lookahead ---
         target_idx = best_idx
         accumulated_dist = 0.0
-        while target_idx < len(self.trajectory_waypoints) - 1 and accumulated_dist < dynamic_lookahead:
+        
+        while target_idx < len(self.trajectory_waypoints) - 1:
             step_dist = np.linalg.norm(self.trajectory_waypoints[target_idx+1] - self.trajectory_waypoints[target_idx])
             accumulated_dist += step_dist
             target_idx += 1
+            
+            # Anti-Reversing Trap: Make sure the target carrot is physically out in front of the drone.
+            dist_from_drone = np.linalg.norm(self.trajectory_waypoints[target_idx] - drone_pos)
+            if accumulated_dist >= dynamic_lookahead and dist_from_drone >= (dynamic_lookahead * 0.8):
+                break
 
-        # MUST use .copy() so we don't permanently deform the stored trajectory array!
         target_pos = self.trajectory_waypoints[target_idx].copy() 
 
         # --- FOCUSED Z-AXIS SPLINE BELLY CLAMPING ---
-        # ONLY check the gate we are currently targeting, and the gate we just left.
-        # This prevents the drone from snapping to the altitude of old gates on intersecting tracks!
-        gates_to_check = []
+        # ONLY clamp to the approaching gate. Removing the exiting gate allows instant steep dives.
         if self.current_traj_gate_number < len(gate_keys):
-            gates_to_check.append(gate_keys[self.current_traj_gate_number]) # Approaching Gate
-        if self.current_traj_gate_number > 0:
-            gates_to_check.append(gate_keys[self.current_traj_gate_number - 1]) # Exiting Gate
-
-        for key in gates_to_check:
-            g_center, _ = self.gate_center_poses_dict[key]
-            dist_xy_to_gate = np.linalg.norm(drone_pos[:2] - g_center[:2])
+            active_gate_key = gate_keys[self.current_traj_gate_number]
+            g_center, _ = self.gate_center_poses_dict[active_gate_key]
             
-            if dist_xy_to_gate < 0.8:  
+            dist_xy_to_gate = np.linalg.norm(drone_pos[:2] - g_center[:2])
+            if dist_xy_to_gate < Z_CLAMP_DIST_XY:  
                 target_pos[2] = g_center[2]
-                break
 
         # --- 5. Calculate target yaw to look slightly further ahead ---
-        yaw_lookahead_idx = min(target_idx + int(0.8 / TRAJ_DT), len(self.trajectory_waypoints) - 1)
+        yaw_lookahead_idx = min(target_idx + int(YAW_LOOKAHEAD_TIME / TRAJ_DT), len(self.trajectory_waypoints) - 1)
         yaw_pos = self.trajectory_waypoints[yaw_lookahead_idx]
         dir_vec_path = yaw_pos - self.trajectory_waypoints[best_idx]
         
-        if np.linalg.norm(dir_vec_path[:2]) > 0.01:
+        if np.linalg.norm(dir_vec_path[:2]) > MIN_VECTOR_NORM:
             target_yaw = np.arctan2(dir_vec_path[1], dir_vec_path[0])
         else:
             target_yaw = sensor_data['yaw']
 
         # --- 6. Check if trajectory is complete ---
         dist_to_end = np.linalg.norm(self.trajectory_waypoints[-1] - drone_pos)
-        if target_idx >= len(self.trajectory_waypoints) - 1 and dist_to_end < 0.2:
+        if target_idx >= len(self.trajectory_waypoints) - 1 and dist_to_end < TRAJ_COMPLETE_DIST:
             self.mode = Mode.GO_HOME
             return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
 
-        # Return all 3 axes on the exact same dynamic lookahead point!
         return [target_pos[0], target_pos[1], target_pos[2], target_yaw]
 
     # ------------------------------------------------------------------
@@ -941,11 +927,6 @@ class MyAssignment:
         for i, gate_idx in enumerate(gate_keys):
             center, gate_yaw = self.gate_center_poses_dict[gate_idx]
 
-            # --- FIX 1: Use the direction from the PREVIOUS key point to the gate
-            # rather than gate_yaw for pre/post alignment.
-            # gate_yaw can point in the wrong direction relative to the drone's
-            # approach, causing the pre/post points to be placed BEHIND the drone,
-            # which creates a U-turn and the looping artifacts.
             if i == 0:
                 prev_point = HOME_POSITION
             else:
@@ -974,173 +955,153 @@ class MyAssignment:
             key_points.append(post_gate)
 
         key_points.append(HOME_POSITION.copy())
-        self.plan_polynomial_trajectory(key_points)
+        self.plan_spline_trajectory(key_points)
+        
         return self.trajectory_waypoints
     
-    def plan_polynomial_trajectory(self, key_points):
+    def plan_spline_trajectory(self, key_points):
         """
-        Fit minimum-jerk 5th-degree polynomials through key_points.
-        Segment times are set by distance / TRAJ_SPEED then iteratively
-        reduced while velocity and acceleration limits are respected.
-        Samples the result at TRAJ_DT intervals and stores in
-        self.trajectory_waypoints (for execution) and self.traj_coeffs /
-        self.traj_segment_times (for evaluation at arbitrary t).
+        Fits a smooth Cubic Spline using custom segment timing (turn penalties, 
+        aggressive Z limits). Prevents loops by ensuring micro alignment-segments 
+        are not subjected to artificial time floors.
         """
         n_segs = len(key_points) - 1
+        points = np.array(key_points)
+        x = points[:, 0]
+        y = points[:, 1]
+        z = points[:, 2]
 
-        # Initial segment times: distance / desired speed
-        n_segs = len(key_points) - 1
-
-        # Initial segment times based on 3D geometry + Kinematic Limits
+        # --- 1. Initial segment times based on 3D geometry + Custom Kinematic Limits ---
         seg_times = []
         for i in range(n_segs):
-            p_curr = np.array(key_points[i])
-            p_next = np.array(key_points[i+1])
+            p_curr = points[i]
+            p_next = points[i+1]
             vec_fwd = p_next - p_curr
             
-            dx = vec_fwd[0]
-            dy = vec_fwd[1]
-            dz = vec_fwd[2]
+            dx, dy, dz = vec_fwd[0], vec_fwd[1], vec_fwd[2]
+            dist_3d = np.linalg.norm(vec_fwd)
             
-            # 1. Kinematically Decoupled Base Time
-            dist_xy = np.sqrt(dx**2 + dy**2)
-            t_xy = dist_xy / TRAJ_SPEED
-            
-            # --- HYPER-AGGRESSIVE VERTICAL LIMITS ---
-            if dz > 0:
-                t_z = dz / 1.5   # Up from 1.0 m/s. Punch the throttle!
+            # --- LOOP FIX: Bypass time inflation for tiny gate-alignment segments ---
+            # Your pre/post gate points are ALIGN_DIST (0.4m) away. 
+            # We strictly enforce proportional time here so the spline stays straight.
+            if dist_3d < 1.0: 
+                t_seg = dist_3d / TRAJ_SPEED
             else:
-                t_z = abs(dz) / 1.2  # Up from 0.8 m/s. Free-fall into the low gates!
+                # 1. Kinematically Decoupled Base Time for large segments
+                dist_xy = np.sqrt(dx**2 + dy**2)
+                t_xy = dist_xy / TRAJ_SPEED
                 
-            t_seg = max(t_xy, t_z)
+                # 2. HYPER-AGGRESSIVE VERTICAL LIMITS
+                if dz > 0:
+                    t_z = dz / 1.5   # Punch the throttle!
+                else:
+                    t_z = abs(dz) / 1.2  # Free-fall into the low gates!
+                    
+                t_seg = max(t_xy, t_z)
+                
+                # 3. Add cornering time at the START of the segment
+                if i > 0:
+                    p_prev = points[i-1]
+                    vec_in = p_curr - p_prev
+                    t_seg += get_turn_penalty(vec_in, vec_fwd) * 0.5 
+                    
+                # 4. Add cornering time at the END of the segment
+                if i < n_segs - 1:
+                    p_next_next = points[i+2]
+                    vec_out = p_next_next - p_next
+                    t_seg += get_turn_penalty(vec_fwd, vec_out) * 0.5 
+
+            seg_times.append(t_seg)
+
+        # --- 2. Iteratively reduce times while checking dynamic limits ---
+        for iteration in range(20):  
+            # Convert segment durations to absolute time knots
+            t_knots = np.insert(np.cumsum(seg_times), 0, 0.0)
             
-            # 2. Add cornering time at the START of the segment
-            if i > 0:
-                p_prev = np.array(key_points[i-1])
-                vec_in = p_curr - p_prev
-                t_seg += get_turn_penalty(vec_in, vec_fwd) * 0.5 
-                
-            # 3. Add cornering time at the END of the segment
-            if i < n_segs - 1:
-                p_next_next = np.array(key_points[i+2])
-                vec_out = p_next_next - p_next
-                t_seg += get_turn_penalty(vec_fwd, vec_out) * 0.5 
-                
-            # --- TWEAK 2: Anti-Ringing Time Floor ---
-            # Raise the minimum time from 0.25s to 0.4s. Giving the alignment 
-            # segment slightly more time acts as a buffer, preventing the polynomial 
-            # from bulging/looping after a massive drop.
-            dist_3d = np.linalg.norm(np.array(key_points[i+1]) - np.array(key_points[i]))
-            # Short segments (pre/post gate, ~0.4m) need proportionally more time
-            # relative to their length to avoid ringing. Scale minimum floor by distance.
-            min_time = max(0.4, dist_3d / TRAJ_SPEED * 1.5)
-            seg_times.append(max(t_seg, min_time))
+            # Fit the Cubic Splines
+            cs_x = CubicSpline(t_knots, x, bc_type='clamped')
+            cs_y = CubicSpline(t_knots, y, bc_type='clamped')
+            cs_z = CubicSpline(t_knots, z, bc_type='clamped')
 
-        # Iteratively reduce times while checking dynamic limits
-        for _ in range(20):  # max 20 reduction iterations
-            # Solve independently per axis
-            xs = [p[0] for p in key_points]
-            ys = [p[1] for p in key_points]
-            zs = [p[2] for p in key_points]
-
-            cx = solve_min_jerk_1d(xs, seg_times)
-            cy = solve_min_jerk_1d(ys, seg_times)
-            cz = solve_min_jerk_1d(zs, seg_times)
-
-            # Check limits by sampling each segment densely
-            feasible = True
-            for seg in range(n_segs):
-                T = seg_times[seg]
-                ts = np.linspace(0, T, max(20, int(T / 0.05)))
-                for t in ts:
-                    vx = eval_poly_vel_1d(cx[seg], t)
-                    vy = eval_poly_vel_1d(cy[seg], t)
-                    vz = eval_poly_vel_1d(cz[seg], t)
-                    ax = eval_poly_acc_1d(cx[seg], t)
-                    ay = eval_poly_acc_1d(cy[seg], t)
-                    az = eval_poly_acc_1d(cz[seg], t)
-
-                    vel = np.sqrt(vx**2 + vy**2 + vz**2)
-                    acc = np.sqrt(ax**2 + ay**2 + az**2)
-
-                    if vel > MAX_VELOCITY or acc > MAX_ACCELERATION:
-                        feasible = False
-                        break
-                if not feasible:
-                    break
-
-            if feasible:
-                # print(f"Trajectory feasible with times: {[f'{t:.2f}' for t in seg_times]}")
+            # Dense sampling to check limits 
+            total_time = t_knots[-1]
+            t_check = np.linspace(0, total_time, max(50, int(total_time / 0.05)))
+            
+            # Evaluate 1st (vel) and 2nd (acc) derivatives simultaneously 
+            vx, vy, vz = cs_x(t_check, 1), cs_y(t_check, 1), cs_z(t_check, 1)
+            ax, ay, az = cs_x(t_check, 2), cs_y(t_check, 2), cs_z(t_check, 2)
+            
+            vels = np.sqrt(vx**2 + vy**2 + vz**2)
+            accs = np.sqrt(ax**2 + ay**2 + az**2)
+            
+            # Check maximums against your physical limits
+            if np.max(vels) <= MAX_VELOCITY and np.max(accs) <= MAX_ACCELERATION:
                 break
             else:
-                # Scale all times up by 10% to slow down
+                # Limit exceeded: Scale all times up by 10% to slow down the drone
                 seg_times = [t * 1.1 for t in seg_times]
-        else:
-            # print("Warning: trajectory did not fully converge to limits — using best found")
-            pass
 
-        # Store coefficients and times for real-time evaluation
-        self.traj_coeffs_x = cx
-        self.traj_coeffs_y = cy
-        self.traj_coeffs_z = cz
-        self.traj_segment_times = seg_times
-        self.traj_key_points = key_points
-        self.traj_start_time = None  # set when EXECUTE_TRAJECTORY begins
+        # --- 3. Final Spline Sampling for Execution ---
+        total_time = t_knots[-1]
+        t_samples = np.arange(0, total_time, TRAJ_DT)
+        
+        dense_x = cs_x(t_samples)
+        dense_y = cs_y(t_samples)
+        dense_z = cs_z(t_samples)
 
-        # Sample trajectory for display and current_waypoint_index tracking
-        waypoints = []
-        for seg in range(n_segs):
-            T = seg_times[seg]
-            ts = np.arange(0, T, TRAJ_DT)
-            for t in ts:
-                x = eval_poly_1d(cx[seg], t)
-                y = eval_poly_1d(cy[seg], t)
-                z = eval_poly_1d(cz[seg], t)
-                waypoints.append(np.array([x, y, z]))
-        waypoints.append(np.array(key_points[-1]))
-        self.trajectory_waypoints = waypoints
-
-        # print(f"Polynomial trajectory: {n_segs} segments, "
-        #     f"total time {sum(seg_times):.1f}s, {len(waypoints)} sample points")
+        self.trajectory_waypoints = np.vstack((dense_x, dense_y, dense_z)).T
+        # print(f"Generated spline trajectory with {len(self.trajectory_waypoints)} waypoints. Total Time: {total_time:.2f}s")
 
         # =================== PLOT CODE (commented out) ===================
-        # --- Plot ---
+        # # --- Plot ---
         # fig = plt.figure(figsize=(12, 5))
 
-        # # 3D path
+        # # --- 1. 3D Path Plot ---
         # ax3d = fig.add_subplot(121, projection='3d')
-        # wp = np.array(waypoints)
-        # ax3d.plot(wp[:, 0], wp[:, 1], wp[:, 2], 'b-', linewidth=1, label='Trajectory')
+        
+        # # Plot the dense sampled path
+        # wp = self.trajectory_waypoints
+        # ax3d.plot(wp[:, 0], wp[:, 1], wp[:, 2], 'b-', linewidth=1, label='Spline Path')
+        
+        # # Plot the anchor key points
         # kp = np.array(key_points)
         # ax3d.scatter(kp[:, 0], kp[:, 1], kp[:, 2], c='red', s=80, zorder=5)
+        
         # for i, p in enumerate(key_points):
-        #     label = 'Home' if (i == 0 or i == len(key_points)-1) else f'Gate {i-1}'
+        #     label = 'Home' if (i == 0 or i == len(key_points)-1) else f'WP {i}'
         #     ax3d.text(p[0], p[1], p[2]+0.1, label, fontsize=8)
+            
         # ax3d.set_xlabel('X'); ax3d.set_ylabel('Y'); ax3d.set_zlabel('Z')
-        # ax3d.set_title('Minimum-jerk trajectory')
+        # ax3d.set_title('Cubic Spline Trajectory')
 
-        # # Velocity profile
+        # # --- 2. Velocity Profile Plot ---
         # ax_v = fig.add_subplot(122)
-        # all_t, all_v = [], []
-        # t_offset = 0
-        # for seg in range(n_segs):
-        #     T = seg_times[seg]
-        #     ts = np.linspace(0, T, 50)
-        #     for t in ts:
-        #         vx = eval_poly_vel_1d(cx[seg], t)
-        #         vy = eval_poly_vel_1d(cy[seg], t)
-        #         vz = eval_poly_vel_1d(cz[seg], t)
-        #         all_t.append(t_offset + t)
-        #         all_v.append(np.sqrt(vx**2 + vy**2 + vz**2))
-        #     t_offset += T
-        # ax_v.plot(all_t, all_v, 'b-')
-        # ax_v.axhline(MAX_VELOCITY, color='r', linestyle='--', label=f'v_max={MAX_VELOCITY}')
+        
+        # # Evaluate the 1st derivative (1) of the splines to get velocity at every time sample
+        # vx = cs_x(t_samples, 1)
+        # vy = cs_y(t_samples, 1)
+        # vz = cs_z(t_samples, 1)
+        
+        # # Calculate the magnitude of the velocity vector (speed)
+        # speeds = np.sqrt(vx**2 + vy**2 + vz**2)
+        
+        # ax_v.plot(t_samples, speeds, 'b-')
+        
+        # # Assuming MAX_VELOCITY is defined globally in your script
+        # try:
+        #     ax_v.axhline(MAX_VELOCITY, color='r', linestyle='--', label=f'v_max={MAX_VELOCITY}')
+        # except NameError:
+        #     pass # Skip if MAX_VELOCITY isn't imported here
+            
         # ax_v.set_xlabel('Time (s)'); ax_v.set_ylabel('Speed (m/s)')
-        # ax_v.set_title('Velocity profile'); ax_v.legend()
+        # ax_v.set_title('Spline Velocity Profile'); ax_v.legend()
 
         # plt.tight_layout()
         # plt.savefig('trajectory.png')
-        # plt.show()
+        # # plt.show()
+        
+        # # Close the figure so it doesn't leak memory or lock up your background thread!
+        # plt.close(fig)
         # =================== END OF PLOT CODE (commented out) ===================
 
     
