@@ -126,7 +126,7 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
 # Trajectory constants
 WAYPOINT_SPACING = 0.1      # metres between waypoints along the path
 ALIGN_DIST = 0.4 
-PRE_WAYPOINT_REACHED_EPS = 0.4
+PRE_WAYPOINT_REACHED_EPS = 0.6
 POST_WAYPOINT_REACHED_EPS = 0.4
 GATE_REACHED_EPS = 0.3
 WAYPOINT_YAW_REACHED_EPS = 0.3
@@ -456,31 +456,21 @@ class MyAssignment:
         if self.traj_sub_state == 'PRE_GATE':
             target = pre_gate
             
-            # Check if position AND yaw are aligned before committing to the gate
-            yaw_error = abs((sensor_data['yaw'] - yaw + np.pi) % (2 * np.pi) - np.pi)
+            # # Check if position AND yaw are aligned before committing to the gate
+            # yaw_error = abs((sensor_data['yaw'] - yaw + np.pi) % (2 * np.pi) - np.pi)
             
             # Must be within 20cm of the pre-gate and facing the correct direction
-            if np.linalg.norm(drone_pos - target) < PRE_WAYPOINT_REACHED_EPS and yaw_error < WAYPOINT_YAW_REACHED_EPS:
+            if np.linalg.norm(drone_pos - target) < PRE_WAYPOINT_REACHED_EPS:
                 self.traj_sub_state = 'CENTER'
                 
         elif self.traj_sub_state == 'CENTER':
             target = center
             if np.linalg.norm(drone_pos - target) < GATE_REACHED_EPS:
-                self.traj_sub_state = 'POST_GATE'
-                
-        elif self.traj_sub_state == 'POST_GATE':
-            target = post_gate
-            if np.linalg.norm(drone_pos - target) < POST_WAYPOINT_REACHED_EPS:
-                # We have cleanly exited the gate. Move to the next one.
                 self.current_traj_gate_number += 1
                 self.traj_sub_state = 'PRE_GATE'
-                
-                # Check if that was the last gate
                 if self.current_traj_gate_number >= len(self.gate_center_poses_dict):
                     self.mode = Mode.GO_HOME
                     return [HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2], 0.0]
-                
-                # Instantly update target to the next gate's pre-gate to avoid pausing
                 next_center, next_yaw = self.gate_center_poses_dict[self.current_traj_gate_number]
                 target = np.array([
                     next_center[0] - np.cos(next_yaw) * ALIGN_DIST,

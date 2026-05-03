@@ -20,8 +20,8 @@ rand_env = True                # Randomise the environment
 
 # 1. Let Python generate a random integer for the seed
 # (Before we lock it, Python uses your computer's unpredictable system time)
-my_seed = random.randint(0, 9999999)
-# my_seed = 1148236
+# my_seed = random.randint(0, 9999999)
+my_seed = 6354462
 file_name = f"data_TEST15_NoTrajectory_Fast2.txt"
 
 # --- REPLAY MODE ---
