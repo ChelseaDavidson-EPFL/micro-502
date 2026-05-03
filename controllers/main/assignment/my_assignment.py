@@ -125,7 +125,7 @@ for _gate_idx, _entry in GATE_SEARCH_POSITIONS.items():
 
 # Trajectory constants
 WAYPOINT_SPACING = 0.1      # metres between waypoints along the path
-ALIGN_DIST = 0.4 
+ALIGN_DIST = 0.2 #0.3 
 PRE_WAYPOINT_REACHED_EPS = 0.6
 POST_WAYPOINT_REACHED_EPS = 0.4
 GATE_REACHED_EPS = 0.3
