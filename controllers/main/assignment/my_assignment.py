@@ -131,8 +131,8 @@ MAX_ACCELERATION = 7.0
 TRAJ_DT = 0.02           
 
 # --- Adaptive Lookahead Parameters ---
-DIST_NEAR = 0.6   
-DIST_FAR = 2.0    
+DIST_NEAR = 0.5   
+DIST_FAR = 2.0   
 LOOKAHEAD_MIN = 0.4 
 LOOKAHEAD_MAX = 1.8 
 
@@ -143,9 +143,6 @@ MIN_VECTOR_NORM = 0.01          # Minimum distance (m) required to safely calcul
 MAX_TURN_ANGLE_RAD = np.pi / 2.0 # 90 degrees in radians
 
 # --- Tracking & Gate Passage Parameters ---
-GATE_PASS_ENTRY_DIST = 0.2      # Distance (m) to enter the gate proximity bubble
-GATE_PASS_EXIT_DIST = 0.5       # Distance (m) to exit the bubble and trigger passage
-TRACKER_SEARCH_WINDOW_TIME = 3.0 # Seconds of trajectory to search for the closest point
 Z_CLAMP_DIST_XY = 0.8           # Lateral distance (m) to snap to the gate's exact Z height
 YAW_LOOKAHEAD_TIME = 0.8        # Seconds ahead on the trajectory to point the camera/yaw
 TRAJ_COMPLETE_DIST = 0.2        # Distance (m) from final waypoint to trigger GO_HOME
@@ -1287,6 +1284,6 @@ def get_turn_penalty(vec_in, vec_out):
         
     cos_theta = np.clip(np.dot(vec_in, vec_out) / (norm_in * norm_out), -1.0, 1.0)
     theta = np.arccos(cos_theta) 
-    MAX_TURN_PENALTY = MAX_TURN_PENALTY = 0.2
+    MAX_TURN_PENALTY = 0.2
     
     return (theta / np.pi) * MAX_TURN_PENALTY
