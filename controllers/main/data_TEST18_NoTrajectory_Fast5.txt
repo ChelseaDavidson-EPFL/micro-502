@@ -68,3 +68,127 @@ Gate progress: [[True, True, True, True, True], [True, True, True, True, True], 
 ----------------------------------
 Time of run: Mon May  4 01:55:13 2026
 Seed: 9391641
+
+----------------------------------
+Time of run: Mon May  4 20:35:57 2026
+Seed: 6753600
+
+----------------------------------
+Time of run: Mon May  4 20:42:34 2026
+Seed: 5349546
+
+----------------------------------
+Time of run: Mon May  4 20:44:01 2026
+Seed: 1399718
+
+----------------------------------
+Time of run: Mon May  4 20:46:08 2026
+Seed: 1044916
+
+----------------------------------
+Time of run: Mon May  4 20:48:01 2026
+Seed: 6355269
+
+----------------------------------
+Time of run: Mon May  4 20:49:31 2026
+Seed: 8116403
+
+----------------------------------
+Time of run: Mon May  4 20:54:11 2026
+Seed: 8100883
+Lap times: [37.344, 14.048000000000002, 14.040000000000006]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Mon May  4 20:58:17 2026
+Seed: 9626628
+Lap times: [47.672000000000004, 9.456000000000003, 10.031999999999996]
+Gate progress: [[True, True, True, True, True], [False, True, True, False, True], [False, True, True, False, False]]
+
+----------------------------------
+Time of run: Mon May  4 21:00:07 2026
+Seed: 2055167
+
+----------------------------------
+Time of run: Mon May  4 21:01:47 2026
+Seed: 4300778
+Lap times: [46.943999999999996, 5.887999999999998, 7.048000000000002]
+Gate progress: [[True, True, True, True, True], [False, False, False, False, False], [False, False, False, False, False]]
+
+----------------------------------
+Time of run: Mon May  4 21:03:42 2026
+Seed: 6266261
+
+----------------------------------
+Time of run: Mon May  4 21:09:40 2026
+Seed: 913500
+
+----------------------------------
+Time of run: Mon May  4 21:10:38 2026
+Seed: 3983680
+Lap times: [39.104, 9.727999999999994, 9.799999999999997]
+Gate progress: [[True, True, True, True, True], [False, True, False, True, False], [False, True, False, True, True]]
+
+----------------------------------
+Time of run: Mon May  4 21:16:53 2026
+Seed: 9549423
+
+----------------------------------
+Time of run: Mon May  4 21:19:03 2026
+Seed: 5271761
+
+----------------------------------
+Time of run: Mon May  4 21:25:43 2026
+Seed: 4757444
+
+----------------------------------
+Time of run: Mon May  4 21:30:19 2026
+Seed: 2945215
+
+----------------------------------
+Time of run: Mon May  4 21:33:58 2026
+Seed: 1994290
+Lap times: [39.184000000000005, 10.360000000000007, 10.176000000000002]
+Gate progress: [[True, True, True, True, True], [True, True, True, False, False], [True, True, False, True, False]]
+
+----------------------------------
+Time of run: Mon May  4 21:37:42 2026
+Seed: 6547793
+
+----------------------------------
+Time of run: Mon May  4 21:42:34 2026
+Seed: 5959576
+Lap times: [40.608, 9.608000000000004, 10.144000000000005]
+Gate progress: [[True, True, True, True, True], [True, False, False, False, True], [True, True, True, False, True]]
+
+----------------------------------
+Time of run: Mon May  4 21:47:05 2026
+Seed: 4525792
+
+----------------------------------
+Time of run: Mon May  4 21:48:41 2026
+Seed: 4812674
+Lap times: [40.944, 11.04, 10.807999999999993]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [False, False, True, True, True]]
+
+----------------------------------
+Time of run: Mon May  4 21:55:00 2026
+Seed: 9384924
+Lap times: [44.208, 17.256000000000007, 17.447999999999993]
+Gate progress: [[True, True, True, True, True], [True, True, True, True, True], [True, True, True, True, True]]
+
+----------------------------------
+Time of run: Mon May  4 21:57:22 2026
+Seed: 1737836
+
+----------------------------------
+Time of run: Mon May  4 21:59:05 2026
+Seed: 8368235
+
+----------------------------------
+Time of run: Mon May  4 22:00:29 2026
+Seed: 9793553
+
+----------------------------------
+Time of run: Mon May  4 22:01:42 2026
+Seed: 6069298
